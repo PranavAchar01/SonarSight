@@ -1,0 +1,44 @@
+package com.sixthsense.core
+
+/**
+ * The single contract the whole system is built around. Every component either
+ * produces or consumes a [SceneState]. Mock mode emits the SAME contract as the
+ * real vision pipeline so the belt, voice agent, and dashboard can be built and
+ * demoed before the on-device models are ready.
+ */
+
+/** Relative obstacle nearness per zone, 0f (far/clear) .. 1f (very near). */
+data class DepthZones(
+    val left: Float,
+    val center: Float,
+    val right: Float,
+    val curbAhead: Boolean = false,
+    val stepDown: Boolean = false,
+)
+
+/** A detected object placed in a zone ("left" | "center" | "right"). */
+data class DetectedObj(
+    val label: String,
+    val zone: String,
+    val nearness: Float,
+    val conf: Float,
+)
+
+/** On-demand OCR result (only populated when the user asks to read text). */
+data class Ocr(
+    val present: Boolean = false,
+    val text: String = "",
+)
+
+/**
+ * @param belt the last belt packet [left, center, right, pattern] for visualization.
+ */
+data class SceneState(
+    val ts: Long,
+    val depth: DepthZones,
+    val objects: List<DetectedObj>,
+    val pathClear: Boolean,
+    val ocr: Ocr = Ocr(),
+    val conf: Float,
+    val belt: List<Int> = emptyList(),
+)

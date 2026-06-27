@@ -1,0 +1,75 @@
+package com.sixthsense.core
+
+/**
+ * Maps a [SceneState] to a 4-byte belt packet: [left, center, right, pattern].
+ *
+ * Pattern:
+ *   0 = steady
+ *   1 = single / caution pulse (low confidence)
+ *   2 = double pulse (curb / step ahead)
+ */
+object BeltMapper {
+
+    /** Nearness below this maps to no buzz. */
+    const val NEAR_THRESHOLD = 0.55f
+
+    /** Low-confidence threshold: below this we emit a cautious center pulse only. */
+    const val LOW_CONF = 0.4f
+
+    /** Gentle "all clear" hum applied to every motor when the path is clear. */
+    const val CLEAR_HUM = 30
+
+    /** Minimum center intensity asserted when a curb/step is detected. */
+    const val CURB_CENTER_MIN = 180
+
+    /** Center intensity for a low-confidence caution. */
+    const val CAUTION_CENTER = 80
+
+    const val PATTERN_STEADY = 0
+    const val PATTERN_PULSE = 1
+    const val PATTERN_DOUBLE = 2
+
+    /** Convenience for the BLE write path. */
+    fun map(scene: SceneState): ByteArray {
+        val p = packetAsInts(scene)
+        return byteArrayOf(p[0].toByte(), p[1].toByte(), p[2].toByte(), p[3].toByte())
+    }
+
+    /** The same packet as ints, for SceneState.belt and the dashboard. */
+    fun packetAsInts(scene: SceneState): List<Int> {
+        var l = intensity(scene.depth.left)
+        var c = intensity(scene.depth.center)
+        var r = intensity(scene.depth.right)
+        var pattern = PATTERN_STEADY
+
+        // Curb / step takes priority: strong center double-pulse.
+        if (scene.depth.curbAhead || scene.depth.stepDown) {
+            pattern = PATTERN_DOUBLE
+            c = maxOf(c, CURB_CENTER_MIN)
+        }
+
+        // Low confidence: never claim a clear direction — caution pulse only.
+        if (scene.conf < LOW_CONF) {
+            pattern = PATTERN_PULSE
+            c = maxOf(c, CAUTION_CENTER)
+            l = 0
+            r = 0
+        }
+
+        // Nothing firing and the scene is genuinely clear: gentle all-clear hum.
+        if (l == 0 && c == 0 && r == 0 && pattern == PATTERN_STEADY && scene.pathClear) {
+            l = CLEAR_HUM
+            c = CLEAR_HUM
+            r = CLEAR_HUM
+        }
+
+        return listOf(l, c, r, pattern)
+    }
+
+    private fun intensity(v: Float): Int {
+        if (v < NEAR_THRESHOLD) return 0
+        return (((v - NEAR_THRESHOLD) / (1f - NEAR_THRESHOLD)) * 255f)
+            .toInt()
+            .coerceIn(0, 255)
+    }
+}

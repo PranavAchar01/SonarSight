@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SixthSense</string>
+    <string name="title">SixthSense</string>
+    <string name="subtitle">Operator / developer console (not the end-user UI)</string>
+
+    <string name="btn_connect_belt">Connect Belt</string>
+    <string name="btn_mock_on">Mock On</string>
+    <string name="btn_mock_off">Mock Off</string>
+    <string name="btn_test_left">Test Left</string>
+    <string name="btn_test_center">Test Center</string>
+    <string name="btn_test_right">Test Right</string>
+    <string name="btn_ask">Ask What\'s Ahead</string>
+
+    <string name="scene_waiting">Waiting for SceneState…</string>
+</resources>

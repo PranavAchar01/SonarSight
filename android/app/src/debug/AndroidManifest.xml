@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY manifest. Registers the development BroadcastReceiver that the MCP
+  server / adb drives. This receiver is NOT present in release builds and is not
+  part of the assistive runtime. exported=true so `adb shell am broadcast` can
+  reach it during development.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name="com.sixthsense.debug.DebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.sixthsense.DEBUG_BELT" />
+                <action android:name="com.sixthsense.DEBUG_MOCK" />
+                <action android:name="com.sixthsense.DEBUG_ASK" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>
