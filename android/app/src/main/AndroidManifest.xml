@@ -1,31 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Camera for the live CameraX vision pipeline. -->
+    <!-- Camera for the live CameraX vision pipeline (chest-phone fallback). -->
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- Phone's own vibration motor for the directional haptics test mode. -->
-    <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- INTERNET is for the LOCAL dashboard WebSocket only (no cloud). -->
+    <!-- Dashboard WebSocket + Meta Wearables DAT session transport. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Bluetooth: Android 12+ runtime permissions. -->
+    <!-- Bluetooth: Meta Wearables DAT glasses session (minSdk 31 = runtime permissions). -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-
-    <!-- Legacy Bluetooth permissions for Android 11 and below. -->
-    <uses-permission
-        android:name="android.permission.BLUETOOTH"
-        android:maxSdkVersion="30" />
-    <uses-permission
-        android:name="android.permission.BLUETOOTH_ADMIN"
-        android:maxSdkVersion="30" />
-    <uses-permission
-        android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="30" />
 
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
@@ -36,12 +23,28 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.DayNight.DarkActionBar">
 
+        <!-- Meta Wearables DAT credentials (empty while the Meta AI app runs in
+             Developer Mode; real values come from the Wearables Developer Center). -->
+        <meta-data
+            android:name="com.meta.wearable.mwdat.APPLICATION_ID"
+            android:value="${mwdat_application_id}" />
+        <meta-data
+            android:name="com.meta.wearable.mwdat.CLIENT_TOKEN"
+            android:value="${mwdat_client_token}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Callback from the Meta AI app after glasses registration/permissions. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sixthsense" />
             </intent-filter>
         </activity>
 

@@ -12,14 +12,20 @@ val useQnn = (project.findProperty("useQnn") as String?)?.toBoolean() ?: false
 
 android {
     namespace = "com.sixthsense"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.sixthsense"
-        minSdk = 26
+        // minSdk 31 is the Meta Wearables DAT SDK floor (glasses camera sessions).
+        minSdk = 31
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        // DAT app credentials from the Wearables Developer Center. Empty is fine
+        // while the paired Meta AI app has Developer Mode enabled.
+        manifestPlaceholders["mwdat_application_id"] = ""
+        manifestPlaceholders["mwdat_client_token"] = ""
 
         // The Galaxy S25 Ultra is arm64-only; drop the dead x86_64 ExecuTorch .so
         // and pre-align with the jniLibs/arm64-v8a layout the QNN .so libs need.
@@ -79,6 +85,11 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraX")
     implementation("androidx.camera:camera-lifecycle:$cameraX")
     implementation("androidx.camera:camera-view:$cameraX")
+
+    // Meta Wearables Device Access Toolkit — Ray-Ban Meta glasses camera stream.
+    val mwdat = "0.8.0"
+    implementation("com.meta.wearable:mwdat-core:$mwdat")
+    implementation("com.meta.wearable:mwdat-camera:$mwdat")
 
     // JSON
     implementation("com.google.code.gson:gson:2.11.0")

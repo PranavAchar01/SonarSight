@@ -12,10 +12,8 @@
             android:name="com.sixthsense.debug.DebugReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.sixthsense.DEBUG_BELT" />
                 <action android:name="com.sixthsense.DEBUG_MOCK" />
                 <action android:name="com.sixthsense.DEBUG_ASK" />
-                <action android:name="com.sixthsense.DEBUG_HAPTICS" />
             </intent-filter>
         </receiver>
     </application>

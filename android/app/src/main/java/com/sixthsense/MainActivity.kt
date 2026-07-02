@@ -2,13 +2,13 @@ package com.sixthsense
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -19,20 +19,21 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.gson.GsonBuilder
+import com.meta.wearable.dat.core.Wearables
+import com.meta.wearable.dat.core.types.Permission
+import com.meta.wearable.dat.core.types.PermissionStatus
 import com.sixthsense.core.SceneState
 import com.sixthsense.debug.AppGraph
 import com.sixthsense.vision.DetectionOverlayView
 import com.sixthsense.vision.VisionStatus
 import com.sixthsense.ws.SceneSocket
-import kotlin.math.max
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * Operator / developer console — NOT the end-user interface. The blind user is
- * guided by the belt / phone haptics and voice; this screen exists for development
- * and the demo operator (start live vision, toggle the phone-haptics test mode and
- * mock, fire belt tests, watch the live SceneState + backend/latency/fps).
+ * Operator / developer console — NOT the end-user interface. This screen exists
+ * for development and the demo operator (start glasses or camera vision, toggle
+ * mock, watch the live SceneState + backend/latency/fps).
  */
 class MainActivity : AppCompatActivity() {
 
@@ -40,18 +41,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusView: TextView
     private lateinit var previewView: PreviewView
     private lateinit var overlay: DetectionOverlayView
-    private lateinit var hapticsButton: Button
-    private lateinit var testRunButton: Button
-    private var testRunActive = false
+    private lateinit var glassesStatusView: TextView
+    private lateinit var glassesPreview: ImageView
+    private lateinit var audioButton: Button
     private var socket: SceneSocket? = null
     private val gson = GsonBuilder().setPrettyPrinting().create()
-
-    private val requestBt = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        Log.i(TAG, "BT permissions: $result")
-        AppGraph.beltClient.connect()
-    }
 
     private val requestCamera = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -60,11 +54,28 @@ class MainActivity : AppCompatActivity() {
         else toast("Camera permission denied — live vision needs the camera.")
     }
 
-    private val requestCameraForTestRun = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) startFullTestRun()
-        else toast("Camera permission denied — the full test run needs the camera.")
+    // Android-side permissions the DAT SDK needs before Wearables.initialize.
+    private val requestGlassesSetup = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (result.values.all { it }) {
+            AppGraph.glassesSource.initialize(this)
+            toast(
+                if (AppGraph.glassesSource.isRegistered) "Glasses SDK ready."
+                else "Approve SixthSense in the Meta AI app, then start glasses vision."
+            )
+        } else {
+            toast("Bluetooth permission denied — glasses session needs it.")
+        }
+    }
+
+    // Wearable-side permission (glasses camera), granted by the wearer in Meta AI.
+    private val requestWearablesCamera = registerForActivityResult(
+        Wearables.RequestPermissionContract()
+    ) { result ->
+        val status = result.getOrDefault(PermissionStatus.Denied)
+        if (status == PermissionStatus.Granted) startGlassesVision()
+        else toast("Glasses camera permission denied in the Meta AI app.")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,10 +84,11 @@ class MainActivity : AppCompatActivity() {
         setContentView(buildUi())
         observeScene()
         observeVisionStatus()
+        observeGlassesStatus()
         startDashboardSocket()
-        // The vision pipeline owns the camera; it streams the live S25 frame to the
+        // The vision pipeline owns the frame source; it streams the live frame to the
         // dashboard (only while a dashboard client is connected) and the voice agent
-        // forwards each interaction. One camera owner — no second CameraX binding.
+        // forwards each interaction.
         AppGraph.visionPipeline.onFrame = { b64, rot -> socket?.pushFrame(b64, rot) }
         AppGraph.visionPipeline.shouldStreamFrame = { socket?.hasClients() == true }
         AppGraph.voiceAgent.onAnswer = { q, intent, a -> socket?.updateVoice(q, intent, a) }
@@ -99,8 +111,8 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, 0, 0, pad)
         })
 
-        // Operator camera preview + AR detection overlay (the blind user does not look
-        // at this). The overlay draws detection boxes on top of the live camera.
+        // Live POV + AR detection overlay. The overlay draws detection boxes on
+        // top of whichever source is active (glasses stream or phone camera).
         val camHeight = (240 * resources.displayMetrics.density).toInt()
         val camContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, camHeight)
@@ -110,13 +122,22 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
             )
         }
+        // Glasses POV preview; FIT_XY matches the model's stretch-resize, so the
+        // overlay's boxes line up the same way they do over the camera preview.
+        glassesPreview = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            scaleType = ImageView.ScaleType.FIT_XY
+        }
         overlay = DetectionOverlayView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
             )
         }
         camContainer.addView(previewView)
-        camContainer.addView(overlay)   // overlay sits on top of the preview
+        camContainer.addView(glassesPreview) // glasses POV sits over the camera preview
+        camContainer.addView(overlay)   // overlay sits on top of both
         root.addView(camContainer)
 
         statusView = TextView(this).apply {
@@ -135,34 +156,31 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { onClick() }
         }
 
-        // One-tap full test run: camera + on-device detection + directional phone
-        // haptics together. Approach an object; when detection fires, the phone
-        // buzzes in that direction. Tap again to exit.
-        testRunButton = button(getString(R.string.btn_test_run_start)) { toggleFullTestRun() }
-        root.addView(testRunButton)
+        // Ray-Ban Meta glasses as the perception input (Meta Wearables DAT).
+        glassesStatusView = TextView(this).apply {
+            text = getString(R.string.glasses_idle)
+            textSize = 12f
+            setPadding(0, pad / 2, 0, 0)
+        }
+        root.addView(glassesStatusView)
+        root.addView(button(getString(R.string.btn_glasses_setup)) { setupGlasses() })
+        root.addView(button(getString(R.string.btn_glasses_start)) { connectGlassesAndStart() })
+        root.addView(button(getString(R.string.btn_glasses_stop)) {
+            AppGraph.glassesSource.stop()
+            AppGraph.visionPipeline.stop()
+        })
 
         root.addView(button(getString(R.string.btn_start_vision)) { connectCameraAndStart() })
         root.addView(button(getString(R.string.btn_stop_vision)) {
             AppGraph.visionPipeline.stop()
         })
-        hapticsButton = button(getString(R.string.btn_haptics_off)) { togglePhoneHaptics() }
-        root.addView(hapticsButton)
-
-        root.addView(button(getString(R.string.btn_connect_belt)) { connectBelt() })
+        audioButton = button(getString(R.string.btn_audio_off)) { toggleCollisionAudio() }
+        root.addView(audioButton)
         root.addView(button(getString(R.string.btn_mock_on)) {
             AppGraph.mockSceneProducer.setEnabled(true)
         })
         root.addView(button(getString(R.string.btn_mock_off)) {
             AppGraph.mockSceneProducer.setEnabled(false)
-        })
-        root.addView(button(getString(R.string.btn_test_left)) {
-            AppGraph.beltClient.send(byteArrayOf(200.toByte(), 0, 0, 0))
-        })
-        root.addView(button(getString(R.string.btn_test_center)) {
-            AppGraph.beltClient.send(byteArrayOf(0, 200.toByte(), 0, 0))
-        })
-        root.addView(button(getString(R.string.btn_test_right)) {
-            AppGraph.beltClient.send(byteArrayOf(0, 0, 200.toByte(), 0))
         })
         root.addView(button(getString(R.string.btn_ask)) {
             // Uses the on-device Qwen LLM when ready (falls back to rule-based);
@@ -199,56 +217,44 @@ class MainActivity : AppCompatActivity() {
         AppGraph.visionPipeline.start(this, previewView)
     }
 
-    /** One button: enter/exit a full test run (camera + detection + phone haptics). */
-    private fun toggleFullTestRun() {
-        if (testRunActive) {
-            stopFullTestRun()
-        } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            startFullTestRun()
-        } else {
-            requestCameraForTestRun.launch(Manifest.permission.CAMERA)
+    /** Step 1: Android BT permissions -> Wearables.initialize -> Meta AI registration. */
+    private fun setupGlasses() {
+        requestGlassesSetup.launch(
+            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+        )
+    }
+
+    /** Step 2: glasses camera permission (via Meta AI) -> stream into the pipeline. */
+    private fun connectGlassesAndStart() {
+        if (!AppGraph.glassesSource.isRegistered) {
+            toast("Run Glasses Setup first (and approve in the Meta AI app).")
+            return
+        }
+        lifecycleScope.launch {
+            val status = Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()
+            if (status == PermissionStatus.Granted) startGlassesVision()
+            else requestWearablesCamera.launch(Permission.CAMERA)
         }
     }
 
-    private fun startFullTestRun() {
-        testRunActive = true
-        AppGraph.visionPipeline.start(this, previewView)
-        AppGraph.phoneHaptics.setEnabled(true)
-        testRunButton.text = getString(R.string.btn_test_run_stop)
-        hapticsButton.text = getString(R.string.btn_haptics_on)
-        if (!AppGraph.phoneHaptics.hasVibrator()) toast("This device has no vibration motor.")
-        toast("Test run on — approach an object; the phone buzzes toward it.")
-    }
-
-    private fun stopFullTestRun() {
-        testRunActive = false
-        AppGraph.phoneHaptics.setEnabled(false)
-        AppGraph.visionPipeline.stop()
-        testRunButton.text = getString(R.string.btn_test_run_start)
-        hapticsButton.text = getString(R.string.btn_haptics_off)
-        toast("Test run off.")
-    }
-
-    private fun togglePhoneHaptics() {
-        val controller = AppGraph.phoneHaptics
-        val enable = !controller.isEnabled()
-        controller.setEnabled(enable)
-        hapticsButton.text =
-            getString(if (enable) R.string.btn_haptics_on else R.string.btn_haptics_off)
-        if (enable && !controller.hasVibrator()) {
-            toast("This device has no vibration motor.")
+    private fun startGlassesVision() {
+        AppGraph.glassesSource.onFrame = { bmp ->
+            runOnUiThread { glassesPreview.setImageBitmap(bmp) }
         }
+        AppGraph.glassesSource.start(AppGraph.scope)
     }
 
-    private fun connectBelt() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            requestBt.launch(
-                arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-            )
-        } else {
-            requestBt.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
+    private fun toggleCollisionAudio() {
+        val enable = !AppGraph.collisionAudio.isEnabled()
+        AppGraph.collisionAudio.setEnabled(enable)
+        audioButton.text =
+            getString(if (enable) R.string.btn_audio_on else R.string.btn_audio_off)
+        if (enable) toast("3D collision audio on — pings pan toward the obstacle.")
+    }
+
+    private fun observeGlassesStatus() {
+        lifecycleScope.launch {
+            AppGraph.glassesSource.status.collectLatest { glassesStatusView.text = it }
         }
     }
 
@@ -257,28 +263,8 @@ class MainActivity : AppCompatActivity() {
             AppGraph.sceneBus.state.collectLatest { scene ->
                 sceneView.text = render(scene)
                 overlay.setDetections(scene.objects)
-                // A "red" (too-close) object fires a directional phone buzz. Skipped when
-                // the full test-mode controller is already driving the motor from the bus.
-                if (!AppGraph.phoneHaptics.isEnabled()) {
-                    AppGraph.phoneHaptics.driveOnce(proximityPacket(scene))
-                }
             }
         }
-    }
-
-    /** Belt packet built only from RED (too-close) detections, so only they buzz. */
-    private fun proximityPacket(s: SceneState): List<Int> {
-        var l = 0; var c = 0; var r = 0
-        for (o in s.objects) {
-            if (o.nearness < DetectionOverlayView.RED_THRESHOLD) continue
-            val i = (o.nearness * 255).toInt().coerceIn(0, 255)
-            when (o.zone) {
-                "left" -> l = max(l, i)
-                "right" -> r = max(r, i)
-                else -> c = max(c, i)
-            }
-        }
-        return listOf(l, c, r, 0)
     }
 
     private fun observeVisionStatus() {
@@ -288,7 +274,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderStatus(s: VisionStatus): String = buildString {
-        append("vision: ${if (s.running) "ON" else "off"}  backend=${s.backend}  testRun=$testRunActive\n")
+        append("vision: ${if (s.running) "ON" else "off"}  backend=${s.backend}\n")
         append("models: depth=${if (s.depthLoaded) "✓" else "—"}  yolo=${if (s.yoloLoaded) "✓" else "—"}  detections=${s.detections}\n")
         append("fps=%.1f  depth=%.0fms  yolo=%.0fms\n".format(s.fps, s.depthMs, s.yoloMs))
         append(s.note)
@@ -296,12 +282,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun render(s: SceneState): String {
         val summary = buildString {
-            append("mock=${AppGraph.mockSceneProducer.isEnabled()}  ")
-            append("haptics=${AppGraph.phoneHaptics.isEnabled()}  ")
-            append("belt=${AppGraph.beltClient.isConnected}\n")
+            append("mock=${AppGraph.mockSceneProducer.isEnabled()}\n")
             append("zones L/C/R = %.2f / %.2f / %.2f\n".format(s.depth.left, s.depth.center, s.depth.right))
             append("pathClear=${s.pathClear}  conf=%.2f\n".format(s.conf))
-            append("belt packet=${s.belt}\n")
             if (s.ocr.present) append("ocr=\"${s.ocr.text}\"\n")
             append("\n")
         }

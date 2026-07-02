@@ -64,7 +64,12 @@ class VisionPipeline(
     @Volatile private var depthModule: EtModule? = null
     @Volatile private var yoloModule: EtModule? = null
     @Volatile private var running = false
+    @Volatile private var externalBusy = false
     @Volatile private var modelsRequested = false
+    private var lastZones = DepthZones(0f, 0f, 0f)
+    private var lastDepthData: FloatArray? = null
+    private var lastDw = 0
+    private var lastDh = 0
     @Volatile private var loggedYolo = false
 
     private var cameraProvider: ProcessCameraProvider? = null
@@ -176,77 +181,132 @@ class VisionPipeline(
         }, ContextCompat.getMainExecutor(context))
     }
 
+    /**
+     * External-frame mode for the Ray-Ban Meta glasses feed: loads models without
+     * binding CameraX. Frames arrive via [submitExternalFrame]; everything
+     * downstream (SceneState, belt, dashboard, voice) is identical to camera mode.
+     */
+    @Synchronized
+    fun startExternal() {
+        running = true
+        _status.value = _status.value.copy(running = true, note = "glasses feed: loading models…")
+        if (!modelsRequested) {
+            modelsRequested = true
+            analysisExecutor.execute { loadModels() }
+        }
+    }
+
+    /** True when a submitted frame would actually be processed (lets the source skip decode work). */
+    fun canAcceptExternalFrame(): Boolean = running && !externalBusy
+
+    /**
+     * Feed one upright ARGB frame from the glasses. Keep-only-latest: while an
+     * inference is in flight new frames are dropped, so the effective rate is the
+     * model rate regardless of the 24fps stream.
+     */
+    fun submitExternalFrame(bitmap: Bitmap) {
+        if (!running || externalBusy) return
+        externalBusy = true
+        analysisExecutor.execute {
+            try {
+                maybeStreamExternalFrame(bitmap)
+                // Depth (Depth-Anything) measures ~3.8s/pass on the SD695 vs ~220ms
+                // for YOLO — one pass stalls the boxes for seconds, so the glasses
+                // loop is YOLO-only. Object nearness comes from box size; the phone-
+                // camera path still runs the full depth+YOLO pipeline.
+                runModels(null, { yoloConv.toTensor(bitmap) })
+            } catch (e: Throwable) {
+                Log.w(TAG, "external frame error: ${e.message}")
+            } finally {
+                externalBusy = false
+            }
+        }
+    }
+
     /** Runs on [analysisExecutor], never the main thread. */
     private fun analyze(image: ImageProxy) {
         try {
             // Stream the raw camera frame to the dashboard even before models load.
             maybeStreamFrame(image)
-            val depth = depthModule
-            val yolo = yoloModule
-            if (depth == null && yolo == null) return  // nothing loaded -> emit nothing (safe)
-
-            // Depth (if present) -> zones + a depth map for object nearness.
-            var zones = DepthZones(0f, 0f, 0f)
-            var depthData: FloatArray? = null
-            var dw = 0; var dh = 0
-            var depthMs = 0.0
-            if (depth != null) {
-                val t0 = System.nanoTime()
-                val depthOut = depth.forward(depthConv.toTensor(image))
-                depthMs = (System.nanoTime() - t0) / 1_000_000.0
-                val dims = depthDims(depthOut)
-                dw = dims.first; dh = dims.second
-                depthData = depthOut.data
-                zones = DepthDecoder.toZones(depthOut.data, dw, dh)
-            }
-
-            // YOLO (if present) -> objects. Nearness from depth when available, else
-            // from box size — so object detection runs and drives haptics standalone.
-            var objects: List<DetectedObj> = emptyList()
-            var yoloMs = 0.0
-            if (yolo != null) {
-                val t1 = System.nanoTime()
-                val yoloOut = yolo.forward(yoloConv.toTensor(image))
-                yoloMs = (System.nanoTime() - t1) / 1_000_000.0
-                // One-time diagnostic to debug detection: confirms the output shape and
-                // that scores look sane (if max≈0, the input scaling/model is wrong).
-                if (!loggedYolo) {
-                    loggedYolo = true
-                    val expected = YoloDecoder.ATTRS * YoloDecoder.ANCHORS_640
-                    val maxScore = yoloOut.data.let { d ->
-                        var m = 0f; val start = 4 * YoloDecoder.ANCHORS_640
-                        var i = start; while (i < d.size) { if (d[i] > m) m = d[i]; i++ }; m
-                    }
-                    Log.i(TAG, "YOLO out size=${yoloOut.data.size} (expect $expected) maxScore=$maxScore")
-                }
-                val dets = YoloDecoder.decode(yoloOut.data, inputSize = YOLO_SIZE)
-                objects = if (depthData != null)
-                    SceneAssembler.toDetectedObjects(dets, depthData, dw, dh, YOLO_SIZE)
-                else
-                    SceneAssembler.toDetectedObjectsNoDepth(dets, YOLO_SIZE)
-            }
-
-            // Path is clear only if neither depth nor a centered near object blocks it.
-            val centerObjNear = objects.any {
-                it.zone == "center" && it.nearness >= BeltMapper.OBJECT_NEAR_THRESHOLD
-            }
-            val pathClear =
-                !zones.curbAhead && zones.center < BeltMapper.NEAR_THRESHOLD && !centerObjNear
-
-            val base = SceneState(
-                ts = System.currentTimeMillis(),
-                depth = zones,
-                objects = objects,
-                pathClear = pathClear,
-                conf = LIVE_CONF,
-            )
-            bus.emit(base.copy(belt = BeltMapper.packetAsInts(base)))
-            updateStatus(depthMs, yoloMs, objects.size)
+            runModels({ depthConv.toTensor(image) }, { yoloConv.toTensor(image) })
         } catch (e: Throwable) {
             Log.w(TAG, "analyze error: ${e.message}")
         } finally {
             image.close() // mandatory or KEEP_ONLY_LATEST stalls
         }
+    }
+
+    /**
+     * Shared inference core; tensor conversion is deferred so each source pays only
+     * for loaded models. A null [depthTensor] skips depth and reuses the cached
+     * zones/depth map from the last depth pass (external-mode cadence).
+     */
+    private fun runModels(
+        depthTensor: (() -> org.pytorch.executorch.Tensor)?,
+        yoloTensor: () -> org.pytorch.executorch.Tensor,
+    ) {
+        val depth = if (depthTensor != null) depthModule else null
+        val yolo = yoloModule
+        if (depthModule == null && yolo == null) return  // nothing loaded -> emit nothing (safe)
+
+        // Depth -> zones + a depth map for object nearness; cached between passes.
+        var zones = lastZones
+        var depthData: FloatArray? = lastDepthData
+        var dw = lastDw; var dh = lastDh
+        var depthMs = 0.0
+        if (depth != null && depthTensor != null) {
+            val t0 = System.nanoTime()
+            val depthOut = depth.forward(depthTensor())
+            depthMs = (System.nanoTime() - t0) / 1_000_000.0
+            val dims = depthDims(depthOut)
+            dw = dims.first; dh = dims.second
+            depthData = depthOut.data
+            zones = DepthDecoder.toZones(depthOut.data, dw, dh)
+            lastZones = zones; lastDepthData = depthData; lastDw = dw; lastDh = dh
+        }
+
+        // YOLO (if present) -> objects. Nearness from depth when available, else
+        // from box size — so object detection runs and drives haptics standalone.
+        var objects: List<DetectedObj> = emptyList()
+        var yoloMs = 0.0
+        if (yolo != null) {
+            val t1 = System.nanoTime()
+            val yoloOut = yolo.forward(yoloTensor())
+            yoloMs = (System.nanoTime() - t1) / 1_000_000.0
+            // One-time diagnostic to debug detection: confirms the output shape and
+            // that scores look sane (if max≈0, the input scaling/model is wrong).
+            if (!loggedYolo) {
+                loggedYolo = true
+                val expected = YoloDecoder.ATTRS * YoloDecoder.ANCHORS_640
+                val maxScore = yoloOut.data.let { d ->
+                    var m = 0f; val start = 4 * YoloDecoder.ANCHORS_640
+                    var i = start; while (i < d.size) { if (d[i] > m) m = d[i]; i++ }; m
+                }
+                Log.i(TAG, "YOLO out size=${yoloOut.data.size} (expect $expected) maxScore=$maxScore")
+            }
+            val dets = YoloDecoder.decode(yoloOut.data, inputSize = YOLO_SIZE)
+            objects = if (depthData != null)
+                SceneAssembler.toDetectedObjects(dets, depthData, dw, dh, YOLO_SIZE)
+            else
+                SceneAssembler.toDetectedObjectsNoDepth(dets, YOLO_SIZE)
+        }
+
+        // Path is clear only if neither depth nor a centered near object blocks it.
+        val centerObjNear = objects.any {
+            it.zone == "center" && it.nearness >= BeltMapper.OBJECT_NEAR_THRESHOLD
+        }
+        val pathClear =
+            !zones.curbAhead && zones.center < BeltMapper.NEAR_THRESHOLD && !centerObjNear
+
+        val base = SceneState(
+            ts = System.currentTimeMillis(),
+            depth = zones,
+            objects = objects,
+            pathClear = pathClear,
+            conf = LIVE_CONF,
+        )
+        bus.emit(base.copy(belt = BeltMapper.packetAsInts(base)))
+        updateStatus(depthMs, yoloMs, objects.size)
     }
 
     /** Throttled: encode the current RGBA frame to a small JPEG for the dashboard. */
@@ -258,6 +318,31 @@ class VisionPipeline(
         lastFrameEmitMs = now
         val b64 = encodeJpegBase64(image) ?: return
         sink(b64, image.imageInfo.rotationDegrees)
+    }
+
+    /** [maybeStreamFrame] for the glasses feed; frames are already upright (rotation 0). */
+    private fun maybeStreamExternalFrame(bmp: Bitmap) {
+        val sink = onFrame ?: return
+        if (!shouldStreamFrame()) return
+        val now = System.currentTimeMillis()
+        if (now - lastFrameEmitMs < FRAME_MIN_INTERVAL_MS) return
+        lastFrameEmitMs = now
+        val b64 = encodeBitmapJpegBase64(bmp) ?: return
+        sink(b64, 0)
+    }
+
+    private fun encodeBitmapJpegBase64(src: Bitmap): String? = try {
+        val scale = FRAME_WIDTH.toFloat() / src.width
+        val scaled = Bitmap.createScaledBitmap(
+            src, FRAME_WIDTH, (src.height * scale).roundToInt().coerceAtLeast(1), true
+        )
+        val baos = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, FRAME_QUALITY, baos)
+        if (scaled !== src) scaled.recycle()
+        Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+    } catch (e: Throwable) {
+        Log.w(TAG, "frame encode error: ${e.message}")
+        null
     }
 
     /** RGBA_8888 ImageProxy -> downscaled JPEG -> base64 (reuses the pipeline's camera). */

@@ -1,11 +1,10 @@
 package com.sixthsense.debug
 
 import android.content.Context
-import com.sixthsense.ble.BeltClient
+import com.sixthsense.audio.CollisionAudioController
 import com.sixthsense.core.MockSceneProducer
 import com.sixthsense.core.SceneBus
-import com.sixthsense.haptics.PhoneHapticsActuator
-import com.sixthsense.haptics.PhoneHapticsController
+import com.sixthsense.glasses.GlassesFrameSource
 import com.sixthsense.vision.VisionPipeline
 import com.sixthsense.voice.LlmEngine
 import com.sixthsense.voice.VoiceAgent
@@ -26,15 +25,15 @@ object AppGraph {
         private set
     lateinit var mockSceneProducer: MockSceneProducer
         private set
-    lateinit var beltClient: BeltClient
-        private set
     lateinit var voiceAgent: VoiceAgent
         private set
     lateinit var llmEngine: LlmEngine
         private set
     lateinit var visionPipeline: VisionPipeline
         private set
-    lateinit var phoneHaptics: PhoneHapticsController
+    lateinit var glassesSource: GlassesFrameSource
+        private set
+    lateinit var collisionAudio: CollisionAudioController
         private set
 
     /** Background scope for producers/streams; survives Activity recreation. */
@@ -48,12 +47,12 @@ object AppGraph {
         if (initialized) return
         val app = context.applicationContext
         sceneBus = SceneBus()
-        beltClient = BeltClient(app)
         mockSceneProducer = MockSceneProducer(sceneBus, scope)
         llmEngine = LlmEngine(app)
         voiceAgent = VoiceAgent(sceneBus, llmEngine)
         visionPipeline = VisionPipeline(app, sceneBus)
-        phoneHaptics = PhoneHapticsController(sceneBus, PhoneHapticsActuator(app), scope)
+        glassesSource = GlassesFrameSource(visionPipeline)
+        collisionAudio = CollisionAudioController(sceneBus, scope)
         initialized = true
         // Load the on-device Qwen LLM off the main thread (fast no-op if qwen.pte
         // isn't bundled; the voice agent uses rule-based answers until it's ready).

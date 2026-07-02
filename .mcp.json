@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "sixthsense": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/Users/pranavachar/Downloads/sixthsense_project_files/sixthsense/mcp",
+        "run",
+        "sixthsense_mcp.py"
+      ],
+      "env": {}
+    }
+  }
+}

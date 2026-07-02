@@ -31,8 +31,13 @@ class FrameToTensor(private val size: Int, private val norm: Norm) {
     // native buffer, so reusing this array across frames is safe (one thread).
     private val chw = FloatArray(3 * size * size)
 
-    fun toTensor(image: ImageProxy): Tensor {
-        val square = squareResize(rotate(imageProxyToBitmap(image), image.imageInfo.rotationDegrees))
+    fun toTensor(image: ImageProxy): Tensor =
+        fromSquare(squareResize(rotate(imageProxyToBitmap(image), image.imageInfo.rotationDegrees)))
+
+    /** Upright ARGB bitmap (e.g. a decoded glasses frame) -> normalized NCHW tensor. */
+    fun toTensor(bitmap: Bitmap): Tensor = fromSquare(squareResize(bitmap))
+
+    private fun fromSquare(square: Bitmap): Tensor {
         square.getPixels(pixels, 0, size, 0, 0, size, size)
 
         val area = size * size

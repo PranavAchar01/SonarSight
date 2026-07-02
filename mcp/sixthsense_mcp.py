@@ -319,6 +319,91 @@ def qaihub_status() -> dict:
     return _run(["qai-hub", "list-jobs"], timeout=60)
 
 
+def _arduino_cli() -> str:
+    """Resolve the arduino-cli executable (PATH, then common Homebrew locations)."""
+    from shutil import which
+    for candidate in ["arduino-cli", "/usr/local/bin/arduino-cli", "/opt/homebrew/bin/arduino-cli"]:
+        if which(candidate):
+            return candidate
+        from pathlib import Path as _P
+        if _P(candidate).exists():
+            return candidate
+    return "arduino-cli"
+
+
+def _sketch_dir(sketch: Optional[str]) -> Path:
+    """Return the absolute sketch directory, defaulting to the belt firmware."""
+    if sketch:
+        p = Path(sketch).expanduser().resolve()
+        return p if p.is_dir() else p.parent
+    return _repo_root() / "firmware" / "esp32_belt"
+
+
+@mcp.tool()
+def arduino_compile(
+    sketch: Optional[str] = None,
+    fqbn: str = "esp32:esp32:esp32",
+) -> dict:
+    """Compile an Arduino sketch with arduino-cli.
+
+    sketch: path to the sketch directory or .ino file (default: firmware/esp32_belt).
+    fqbn:   fully-qualified board name (default: esp32:esp32:esp32).
+
+    Prerequisites (run once):
+      brew install arduino-cli
+      arduino-cli core install esp32:esp32
+    """
+    return _run(
+        [_arduino_cli(), "compile", "--fqbn", fqbn, str(_sketch_dir(sketch))],
+        timeout=300,
+    )
+
+
+@mcp.tool()
+def arduino_upload(
+    port: str,
+    sketch: Optional[str] = None,
+    fqbn: str = "esp32:esp32:esp32",
+) -> dict:
+    """Compile and upload an Arduino sketch to the ESP32 over USB.
+
+    port:   serial port, e.g. /dev/cu.usbserial-0001 (list with: ls /dev/cu.usb*)
+    sketch: path to the sketch directory or .ino file (default: firmware/esp32_belt).
+    fqbn:   fully-qualified board name (default: esp32:esp32:esp32).
+    """
+    return _run(
+        [_arduino_cli(), "upload", "-p", port, "--fqbn", fqbn, str(_sketch_dir(sketch))],
+        timeout=120,
+    )
+
+
+@mcp.tool()
+def arduino_serial(port: str, baud: int = 115200, lines: int = 50) -> dict:
+    """Capture a short burst of serial output from the ESP32 (non-interactive).
+
+    Uses `timeout` (macOS / GNU coreutils) to read for ~3 seconds, then returns the
+    captured output. Useful for confirming the firmware started and the belt is
+    advertising. For a live monitor, run: arduino-cli monitor -p PORT -b BAUD
+    """
+    import shutil
+    timeout_bin = shutil.which("timeout") or shutil.which("gtimeout")
+    if not timeout_bin:
+        return {
+            "exit_code": 1,
+            "stderr": (
+                "`timeout` not found. Install coreutils: brew install coreutils  "
+                "(provides `gtimeout`). Or open a terminal and run: "
+                f"arduino-cli monitor -p {port} -c baudrate={baud}"
+            ),
+        }
+    # Read for 3 s; exit 124 is the timeout signal (not an error here).
+    result = _run([timeout_bin, "3", _arduino_cli(), "monitor", "-p", port, "-c", f"baudrate={baud}"], timeout=10)
+    if result["exit_code"] == 124:
+        result["exit_code"] = 0  # expected: timed out after 3 s
+        result["stderr"] = result["stderr"].replace("Killed", "").strip()
+    return result
+
+
 if __name__ == "__main__":
     _log(f"starting sixthsense MCP (root={_repo_root()}, adb={_adb_path()})")
     mcp.run()
