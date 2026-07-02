@@ -1,17 +1,18 @@
-# SixthSense
+# SonarSight
 
-**An on-device navigation copilot for blind and low-vision users.**
+**A navigation copilot for blind and low-vision users — see with your ears.**
+*(formerly SixthSense; internal Android package remains `com.sixthsense`)*
 
-A chest-mounted Samsung Galaxy S25 Ultra watches the path ahead, runs vision + reasoning
-models locally (ExecuTorch / Qualcomm QNN where possible), and converts the scene into a
-compact `SceneState`. That state drives three outputs:
+Ray-Ban Meta glasses stream the wearer's point of view to an Android phone via
+the **Meta Wearables Device Access Toolkit**. The phone runs YOLO11n on-device
+(ExecuTorch, int8/XNNPACK) and converts the scene into a compact `SceneState`.
+That state drives three outputs:
 
-1. **Haptic belt** — a BLE ESP32 belt with left/center/right vibration motors (a *dumb actuator*).
-2. **On-device voice agent** — push-to-talk answers to "what's ahead?", "read that sign", "find the exit".
+1. **3D spatial collision audio** — sonar pings through the glasses' open-ear
+   speakers, stereo-panned toward the obstacle; rate, pitch, and loudness rise
+   as it nears. Ambient hearing stays free.
+2. **Voice agent** — answers to "what's ahead?", "read that sign", "find the exit".
 3. **Live dashboard** — a React/Vite visualization for judges (visualization only, no AI).
-
-The thesis: **navigation safety should not depend on cloud connectivity.** The demo runs
-fully on-device and works in **airplane mode** once the app and models are on the phone.
 
 > **Claude / MCP is a development & debugging command center only.** It is used to build,
 > install, inspect logs, drive debug broadcasts, and manage the repo. It is **never** part of

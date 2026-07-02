@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SixthSense</string>
-    <string name="title">SixthSense</string>
+    <string name="app_name">SonarSight</string>
+    <string name="title">SonarSight</string>
     <string name="subtitle">Operator / developer console (not the end-user UI)</string>
 
     <string name="btn_glasses_setup">Glasses Setup (register with Meta AI)</string>
