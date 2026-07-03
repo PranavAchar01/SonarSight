@@ -1,10 +1,13 @@
 package com.sixthsense
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
@@ -26,7 +29,9 @@ import com.sixthsense.core.SceneState
 import com.sixthsense.debug.AppGraph
 import com.sixthsense.vision.DetectionOverlayView
 import com.sixthsense.vision.VisionStatus
+import com.sixthsense.voice.VoiceRecorder
 import com.sixthsense.ws.SceneSocket
+import java.util.Locale
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -45,7 +50,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var glassesPreview: ImageView
     private lateinit var audioButton: Button
     private lateinit var cloudButton: Button
+    private lateinit var askButton: Button
     private var socket: SceneSocket? = null
+    private var tts: TextToSpeech? = null
+    private val recorder = VoiceRecorder()
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
     private val requestCamera = registerForActivityResult(
@@ -68,6 +76,13 @@ class MainActivity : AppCompatActivity() {
         } else {
             toast("Bluetooth permission denied — glasses session needs it.")
         }
+    }
+
+    private val requestMic = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) toast("Mic ready — hold the Ask button and speak.")
+        else toast("Microphone permission denied — voice questions need it.")
     }
 
     // Wearable-side permission (glasses camera), granted by the wearer in Meta AI.
@@ -93,6 +108,9 @@ class MainActivity : AppCompatActivity() {
         AppGraph.visionPipeline.onFrame = { b64, rot -> socket?.pushFrame(b64, rot) }
         AppGraph.visionPipeline.shouldStreamFrame = { socket?.hasClients() == true }
         AppGraph.voiceAgent.onAnswer = { q, intent, a -> socket?.updateVoice(q, intent, a) }
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) tts?.language = Locale.US
+        }
     }
 
     private fun buildUi(): ScrollView {
@@ -179,6 +197,9 @@ class MainActivity : AppCompatActivity() {
         root.addView(audioButton)
         cloudButton = button(getString(R.string.btn_cloud_off)) { toggleCloudVision() }
         root.addView(cloudButton)
+        askButton = button(getString(R.string.btn_ask_hold)) { }
+        wireHoldToAsk()
+        root.addView(askButton)
         root.addView(button(getString(R.string.btn_mock_on)) {
             AppGraph.mockSceneProducer.setEnabled(true)
         })
@@ -246,6 +267,57 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { glassesPreview.setImageBitmap(bmp) }
         }
         AppGraph.glassesSource.start(AppGraph.scope)
+    }
+
+    /** Press-and-hold voice question: record -> Whisper -> Qwen-VL -> spoken answer. */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun wireHoldToAsk() {
+        askButton.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                        != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        requestMic.launch(Manifest.permission.RECORD_AUDIO)
+                    } else if (recorder.start()) {
+                        askButton.text = getString(R.string.btn_ask_recording)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    askButton.text = getString(R.string.btn_ask_hold)
+                    val wav = recorder.stop()
+                    if (wav != null) submitVoiceQuestion(wav)
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun submitVoiceQuestion(wav: ByteArray) {
+        toast("Thinking…")
+        AppGraph.cloudAsk.ask(
+            wav = wav,
+            frame = AppGraph.glassesSource.lastFrame,
+            onTranscript = { q ->
+                runOnUiThread { toast("You asked: $q") }
+                socket?.updateVoice(q, "cloud", "…")
+            },
+            onAnswer = { answer ->
+                Log.i(TAG, "Surroundings answer: $answer")
+                runOnUiThread {
+                    tts?.speak(answer, TextToSpeech.QUEUE_FLUSH, null, "sonarsight-answer")
+                }
+                socket?.updateVoice("", "cloud", answer)
+            },
+            onError = { msg ->
+                runOnUiThread {
+                    toast(msg)
+                    tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, "sonarsight-error")
+                }
+            },
+        )
     }
 
     private fun toggleCloudVision() {
@@ -318,6 +390,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        tts?.shutdown()
         socket?.shutdown()
         // CameraX unbinds with the lifecycle automatically; fully stop the pipeline
         // (close models, free the executor's work) only when the app is finishing.

@@ -18,6 +18,8 @@
     <string name="btn_mock_on">Mock On</string>
     <string name="btn_mock_off">Mock Off</string>
     <string name="btn_ask">Ask What\'s Ahead</string>
+    <string name="btn_ask_hold">🎤 Hold to Ask About Surroundings</string>
+    <string name="btn_ask_recording">● Listening… release when done</string>
 
     <string name="vision_idle">vision: off — Start Live Vision or use Mock</string>
     <string name="scene_waiting">Waiting for SceneState…</string>

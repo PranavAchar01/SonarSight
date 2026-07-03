@@ -42,6 +42,11 @@ class GlassesFrameSource(private val pipeline: VisionPipeline) {
     var onFrame: ((android.graphics.Bitmap) -> Unit)? = null
     private var lastPreviewMs = 0L
 
+    /** Most recent decoded POV frame — what the voice agent's VLM looks at. */
+    @Volatile
+    var lastFrame: android.graphics.Bitmap? = null
+        private set
+
     private var session: DeviceSession? = null
     private var stream: Stream? = null
     private val jobs = mutableListOf<Job>()
@@ -135,6 +140,7 @@ class GlassesFrameSource(private val pipeline: VisionPipeline) {
                         if (!wantPreview && !wantInfer) return@collect
                         val bmp = I420ToBitmap.convert(frame.buffer, frame.width, frame.height)
                             ?: return@collect
+                        lastFrame = bmp
                         if (wantPreview) {
                             lastPreviewMs = now
                             onFrame?.invoke(bmp)

@@ -4,6 +4,9 @@
     <!-- Camera for the live CameraX vision pipeline (chest-phone fallback). -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Push-to-talk voice questions ("what's around me?"). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
 
     <!-- Dashboard WebSocket + Meta Wearables DAT session transport. -->
     <uses-permission android:name="android.permission.INTERNET" />
