@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var glassesStatusView: TextView
     private lateinit var glassesPreview: ImageView
     private lateinit var audioButton: Button
+    private lateinit var cloudButton: Button
     private var socket: SceneSocket? = null
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -176,6 +177,8 @@ class MainActivity : AppCompatActivity() {
         })
         audioButton = button(getString(R.string.btn_audio_off)) { toggleCollisionAudio() }
         root.addView(audioButton)
+        cloudButton = button(getString(R.string.btn_cloud_off)) { toggleCloudVision() }
+        root.addView(cloudButton)
         root.addView(button(getString(R.string.btn_mock_on)) {
             AppGraph.mockSceneProducer.setEnabled(true)
         })
@@ -239,9 +242,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun startGlassesVision() {
         AppGraph.glassesSource.onFrame = { bmp ->
+            AppGraph.cloudVision.submit(bmp)
             runOnUiThread { glassesPreview.setImageBitmap(bmp) }
         }
         AppGraph.glassesSource.start(AppGraph.scope)
+    }
+
+    private fun toggleCloudVision() {
+        if (BuildConfig.CLOUD_VISION_URL.isBlank()) {
+            toast("No cloud endpoint configured (set cloud_vision_url in local.properties).")
+            return
+        }
+        val enable = !AppGraph.cloudVision.enabled
+        AppGraph.cloudVision.enabled = enable
+        cloudButton.text =
+            getString(if (enable) R.string.btn_cloud_on else R.string.btn_cloud_off)
+        toast(if (enable) "Cloud vision on — YOLO11x on GPU." else "Cloud vision off — local model.")
     }
 
     private fun toggleCollisionAudio() {
@@ -274,9 +290,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderStatus(s: VisionStatus): String = buildString {
-        append("vision: ${if (s.running) "ON" else "off"}  backend=${s.backend}\n")
+        val src = if (s.cloudActive) "CLOUD (YOLO11x)" else "local (${s.backend})"
+        append("vision: ${if (s.running) "ON" else "off"}  src=$src\n")
         append("models: depth=${if (s.depthLoaded) "✓" else "—"}  yolo=${if (s.yoloLoaded) "✓" else "—"}  detections=${s.detections}\n")
-        append("fps=%.1f  depth=%.0fms  yolo=%.0fms\n".format(s.fps, s.depthMs, s.yoloMs))
+        append("fps=%.1f  depth=%.0fms  %s=%.0fms\n".format(
+            s.fps, s.depthMs, if (s.cloudActive) "cloud-rtt" else "yolo", s.yoloMs))
         append(s.note)
     }
 

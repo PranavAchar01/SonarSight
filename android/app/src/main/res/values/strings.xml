@@ -11,6 +11,8 @@
 
     <string name="btn_start_vision">Start Live Vision (phone camera)</string>
     <string name="btn_stop_vision">Stop Live Vision</string>
+    <string name="btn_cloud_on">Cloud Vision (YOLO11x GPU): ON</string>
+    <string name="btn_cloud_off">Cloud Vision (YOLO11x GPU): OFF</string>
     <string name="btn_audio_on">3D Collision Audio: ON</string>
     <string name="btn_audio_off">3D Collision Audio: OFF</string>
     <string name="btn_mock_on">Mock On</string>

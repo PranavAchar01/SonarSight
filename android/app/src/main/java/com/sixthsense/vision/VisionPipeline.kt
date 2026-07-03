@@ -36,6 +36,7 @@ data class VisionStatus(
     val yoloMs: Double = 0.0,
     val fps: Double = 0.0,
     val detections: Int = 0,
+    val cloudActive: Boolean = false,
     val note: String = "idle",
 )
 
@@ -70,6 +71,23 @@ class VisionPipeline(
     private var lastDepthData: FloatArray? = null
     private var lastDw = 0
     private var lastDh = 0
+
+    // Cloud detection tier (YOLO11x on GPU). Fresh results outrank local YOLO;
+    // staleness flips the pipeline back to on-device — automatic degradation.
+    @Volatile private var cloudObjects: List<DetectedObj>? = null
+    @Volatile private var cloudTs = 0L
+    @Volatile private var cloudRttMs = 0L
+
+    /** Called by CloudVisionClient with detections mapped to the SceneState contract. */
+    fun submitCloudDetections(objects: List<DetectedObj>, rttMs: Long) {
+        cloudObjects = objects
+        cloudTs = System.currentTimeMillis()
+        cloudRttMs = rttMs
+    }
+
+    fun noteCloudFailure() {
+        cloudTs = 0L  // immediately stale -> local model takes over
+    }
     @Volatile private var loggedYolo = false
 
     private var cameraProvider: ProcessCameraProvider? = null
@@ -265,11 +283,19 @@ class VisionPipeline(
             lastZones = zones; lastDepthData = depthData; lastDw = dw; lastDh = dh
         }
 
+        // Cloud tier first: a fresh YOLO11x result beats the local nano model and
+        // saves the CPU inference entirely. Stale/failed -> local YOLO resumes.
+        val cloud = cloudObjects
+        val cloudFresh = cloud != null && System.currentTimeMillis() - cloudTs < CLOUD_FRESH_MS
+
         // YOLO (if present) -> objects. Nearness from depth when available, else
         // from box size — so object detection runs and drives haptics standalone.
         var objects: List<DetectedObj> = emptyList()
         var yoloMs = 0.0
-        if (yolo != null) {
+        if (cloudFresh && cloud != null) {
+            objects = cloud
+            yoloMs = cloudRttMs.toDouble()
+        } else if (yolo != null) {
             val t1 = System.nanoTime()
             val yoloOut = yolo.forward(yoloTensor())
             yoloMs = (System.nanoTime() - t1) / 1_000_000.0
@@ -306,7 +332,7 @@ class VisionPipeline(
             conf = LIVE_CONF,
         )
         bus.emit(base.copy(belt = BeltMapper.packetAsInts(base)))
-        updateStatus(depthMs, yoloMs, objects.size)
+        updateStatus(depthMs, yoloMs, objects.size, cloudFresh)
     }
 
     /** Throttled: encode the current RGBA frame to a small JPEG for the dashboard. */
@@ -373,7 +399,12 @@ class VisionPipeline(
         }
     }
 
-    private fun updateStatus(depthMs: Double, yoloMs: Double, detections: Int) {
+    private fun updateStatus(
+        depthMs: Double,
+        yoloMs: Double,
+        detections: Int,
+        cloudActive: Boolean = false,
+    ) {
         val now = System.nanoTime()
         if (lastFrameNs != 0L) {
             val inst = 1_000_000_000.0 / (now - lastFrameNs).coerceAtLeast(1)
@@ -385,6 +416,7 @@ class VisionPipeline(
             yoloMs = yoloMs,
             fps = (emaFps * 10).roundToInt() / 10.0,
             detections = detections,
+            cloudActive = cloudActive,
         )
     }
 
@@ -410,6 +442,7 @@ class VisionPipeline(
         private const val FRAME_WIDTH = 480
         private const val FRAME_QUALITY = 50
         private const val FRAME_MIN_INTERVAL_MS = 125L   // ~8 fps to the dashboard
+        private const val CLOUD_FRESH_MS = 900L          // cloud result validity window
 
         // Candidate asset names (Stream B ships depth.pte/yolo.pte; docs use longer names).
         private val DEPTH_ASSETS = listOf(

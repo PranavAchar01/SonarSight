@@ -35,6 +35,21 @@ android {
 
         // Active ExecuTorch backend, surfaced in the operator UI. Driven by -PuseQnn.
         buildConfigField("String", "EXECUTORCH_BACKEND", if (useQnn) "\"qnn\"" else "\"xnnpack\"")
+
+        // Cloud detection tier (cloud/server.py on a GPU host). Both values come
+        // from the untracked local.properties: cloud_vision_url / cloud_vision_key.
+        val localProps = java.util.Properties().apply {
+            val f = rootProject.file("local.properties")
+            if (f.exists()) f.inputStream().use { load(it) }
+        }
+        buildConfigField(
+            "String", "CLOUD_VISION_URL",
+            "\"${localProps.getProperty("cloud_vision_url") ?: ""}\""
+        )
+        buildConfigField(
+            "String", "CLOUD_VISION_KEY",
+            "\"${localProps.getProperty("cloud_vision_key") ?: ""}\""
+        )
     }
 
     buildTypes {

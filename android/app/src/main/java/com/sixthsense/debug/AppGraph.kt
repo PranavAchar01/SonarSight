@@ -2,6 +2,7 @@ package com.sixthsense.debug
 
 import android.content.Context
 import com.sixthsense.audio.CollisionAudioController
+import com.sixthsense.cloud.CloudVisionClient
 import com.sixthsense.core.MockSceneProducer
 import com.sixthsense.core.SceneBus
 import com.sixthsense.glasses.GlassesFrameSource
@@ -35,6 +36,8 @@ object AppGraph {
         private set
     lateinit var collisionAudio: CollisionAudioController
         private set
+    lateinit var cloudVision: CloudVisionClient
+        private set
 
     /** Background scope for producers/streams; survives Activity recreation. */
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -53,6 +56,7 @@ object AppGraph {
         visionPipeline = VisionPipeline(app, sceneBus)
         glassesSource = GlassesFrameSource(visionPipeline)
         collisionAudio = CollisionAudioController(sceneBus, scope)
+        cloudVision = CloudVisionClient(visionPipeline)
         initialized = true
         // Load the on-device Qwen LLM off the main thread (fast no-op if qwen.pte
         // isn't bundled; the voice agent uses rule-based answers until it's ready).
