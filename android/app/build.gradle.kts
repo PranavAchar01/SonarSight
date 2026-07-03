@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -38,7 +40,7 @@ android {
 
         // Cloud detection tier (cloud/server.py on a GPU host). Both values come
         // from the untracked local.properties: cloud_vision_url / cloud_vision_key.
-        val localProps = java.util.Properties().apply {
+        val localProps = Properties().apply {
             val f = rootProject.file("local.properties")
             if (f.exists()) f.inputStream().use { load(it) }
         }
