@@ -52,6 +52,11 @@ android {
             "String", "CLOUD_VISION_KEY",
             "\"${localProps.getProperty("cloud_vision_key") ?: ""}\""
         )
+        // Qwen Cloud (Model Studio / DashScope) key for the voice Q&A loop.
+        buildConfigField(
+            "String", "QWEN_API_KEY",
+            "\"${localProps.getProperty("qwen_api_key") ?: ""}\""
+        )
     }
 
     buildTypes {
