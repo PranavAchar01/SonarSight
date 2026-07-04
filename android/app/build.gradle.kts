@@ -38,21 +38,12 @@ android {
         // Active ExecuTorch backend, surfaced in the operator UI. Driven by -PuseQnn.
         buildConfigField("String", "EXECUTORCH_BACKEND", if (useQnn) "\"qnn\"" else "\"xnnpack\"")
 
-        // Cloud detection tier (cloud/server.py on a GPU host). Both values come
-        // from the untracked local.properties: cloud_vision_url / cloud_vision_key.
         val localProps = Properties().apply {
             val f = rootProject.file("local.properties")
             if (f.exists()) f.inputStream().use { load(it) }
         }
-        buildConfigField(
-            "String", "CLOUD_VISION_URL",
-            "\"${localProps.getProperty("cloud_vision_url") ?: ""}\""
-        )
-        buildConfigField(
-            "String", "CLOUD_VISION_KEY",
-            "\"${localProps.getProperty("cloud_vision_key") ?: ""}\""
-        )
-        // Qwen Cloud (Model Studio / DashScope) key for the voice Q&A loop.
+        // Qwen Cloud (Model Studio / DashScope) key — drives both the cloud
+        // detection tier (qwen-vl-max grounding) and the voice Q&A loop.
         buildConfigField(
             "String", "QWEN_API_KEY",
             "\"${localProps.getProperty("qwen_api_key") ?: ""}\""

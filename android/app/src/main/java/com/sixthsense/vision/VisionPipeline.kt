@@ -72,8 +72,8 @@ class VisionPipeline(
     private var lastDw = 0
     private var lastDh = 0
 
-    // Cloud detection tier (YOLO11x on GPU). Fresh results outrank local YOLO;
-    // staleness flips the pipeline back to on-device — automatic degradation.
+    // Cloud detection tier (qwen-vl-max grounding on Qwen Cloud). Fresh results
+    // outrank local YOLO; staleness flips back to on-device — automatic degradation.
     @Volatile private var cloudObjects: List<DetectedObj>? = null
     @Volatile private var cloudTs = 0L
     @Volatile private var cloudRttMs = 0L
@@ -283,10 +283,13 @@ class VisionPipeline(
             lastZones = zones; lastDepthData = depthData; lastDw = dw; lastDh = dh
         }
 
-        // Cloud tier first: a fresh YOLO11x result beats the local nano model and
-        // saves the CPU inference entirely. Stale/failed -> local YOLO resumes.
+        // Cloud tier first: a fresh qwen-vl-max grounding result beats the local
+        // nano model. A VLM round trip is seconds, so "fresh" scales with the
+        // measured RTT (a result is valid roughly until the next one lands —
+        // single-flight means that's ~one RTT away). Stale/failed -> local resumes.
         val cloud = cloudObjects
-        val cloudFresh = cloud != null && System.currentTimeMillis() - cloudTs < CLOUD_FRESH_MS
+        val freshWindow = (cloudRttMs * 2).coerceIn(CLOUD_FRESH_MIN_MS, CLOUD_FRESH_MAX_MS)
+        val cloudFresh = cloud != null && System.currentTimeMillis() - cloudTs < freshWindow
 
         // YOLO (if present) -> objects. Nearness from depth when available, else
         // from box size — so object detection runs and drives haptics standalone.
@@ -442,7 +445,8 @@ class VisionPipeline(
         private const val FRAME_WIDTH = 480
         private const val FRAME_QUALITY = 50
         private const val FRAME_MIN_INTERVAL_MS = 125L   // ~8 fps to the dashboard
-        private const val CLOUD_FRESH_MS = 900L          // cloud result validity window
+        private const val CLOUD_FRESH_MIN_MS = 900L      // cloud validity floor (fast RTT)
+        private const val CLOUD_FRESH_MAX_MS = 8000L     // cap so stale boxes can't linger
 
         // Candidate asset names (Stream B ships depth.pte/yolo.pte; docs use longer names).
         private val DEPTH_ASSETS = listOf(

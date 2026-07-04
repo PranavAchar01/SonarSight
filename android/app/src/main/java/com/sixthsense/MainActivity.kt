@@ -321,15 +321,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleCloudVision() {
-        if (BuildConfig.CLOUD_VISION_URL.isBlank()) {
-            toast("No cloud endpoint configured (set cloud_vision_url in local.properties).")
+        if (!AppGraph.cloudVision.configured) {
+            toast("No Qwen API key configured (qwen_api_key in local.properties).")
             return
         }
         val enable = !AppGraph.cloudVision.enabled
         AppGraph.cloudVision.enabled = enable
         cloudButton.text =
             getString(if (enable) R.string.btn_cloud_on else R.string.btn_cloud_off)
-        toast(if (enable) "Cloud vision on — YOLO11x on GPU." else "Cloud vision off — local model.")
+        toast(
+            if (enable) "Cloud vision on — qwen-vl-max grounding on Qwen Cloud."
+            else "Cloud vision off — local model."
+        )
     }
 
     private fun toggleCollisionAudio() {
@@ -362,7 +365,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderStatus(s: VisionStatus): String = buildString {
-        val src = if (s.cloudActive) "CLOUD (YOLO11x)" else "local (${s.backend})"
+        val src = if (s.cloudActive) "QWEN CLOUD (vl-max)" else "local (${s.backend})"
         append("vision: ${if (s.running) "ON" else "off"}  src=$src\n")
         append("models: depth=${if (s.depthLoaded) "✓" else "—"}  yolo=${if (s.yoloLoaded) "✓" else "—"}  detections=${s.detections}\n")
         append("fps=%.1f  depth=%.0fms  %s=%.0fms\n".format(
