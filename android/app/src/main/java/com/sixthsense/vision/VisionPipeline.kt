@@ -75,12 +75,18 @@ class VisionPipeline(
     // Cloud detection tier (qwen-vl-max grounding on Qwen Cloud). Fresh results
     // outrank local YOLO; staleness flips back to on-device — automatic degradation.
     @Volatile private var cloudObjects: List<DetectedObj>? = null
+    @Volatile private var cloudZones: DepthZones? = null
     @Volatile private var cloudTs = 0L
     @Volatile private var cloudRttMs = 0L
 
-    /** Called by CloudVisionClient with detections mapped to the SceneState contract. */
-    fun submitCloudDetections(objects: List<DetectedObj>, rttMs: Long) {
+    /**
+     * Called by CloudVisionClient with detections mapped to the SceneState
+     * contract, plus optional VLM-judged surface proximity zones — the glasses
+     * loop runs no depth model, so this is its only source of wall awareness.
+     */
+    fun submitCloudDetections(objects: List<DetectedObj>, zones: DepthZones?, rttMs: Long) {
         cloudObjects = objects
+        cloudZones = zones
         cloudTs = System.currentTimeMillis()
         cloudRttMs = rttMs
     }
@@ -298,6 +304,7 @@ class VisionPipeline(
         if (cloudFresh && cloud != null) {
             objects = cloud
             yoloMs = cloudRttMs.toDouble()
+            cloudZones?.let { zones = it }  // VLM surface proximity -> pathClear/belt
         } else if (yolo != null) {
             val t1 = System.nanoTime()
             val yoloOut = yolo.forward(yoloTensor())

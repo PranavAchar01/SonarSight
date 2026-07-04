@@ -7,7 +7,9 @@ import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.sixthsense.BuildConfig
+import com.sixthsense.core.BeltMapper
 import com.sixthsense.core.BoundingBox
+import com.sixthsense.core.DepthZones
 import com.sixthsense.core.DetectedObj
 import com.sixthsense.vision.VisionPipeline
 import java.io.ByteArrayOutputStream
@@ -20,8 +22,13 @@ import kotlin.math.roundToInt
  * Cloud detection tier on Qwen Cloud (Model Studio / DashScope): glasses frames
  * go to qwen-vl-max, whose Qwen2.5-VL grounding outputs labeled bounding boxes
  * for everything in the scene — open-vocabulary, far beyond the 80 COCO classes
- * the on-device nano model knows. Detections feed back into [VisionPipeline],
- * where fresh cloud results take precedence over the local int8 model.
+ * the on-device nano model knows. The same call also scores per-zone surface
+ * proximity (left/center/right), which catches what NO box detector can: a
+ * featureless painted wall, glass, a pillar filling the frame. Close zones with
+ * no covering detection become synthetic "obstacle" objects, so the collision
+ * pinger fires toward them exactly like toward a detected object. Detections
+ * feed back into [VisionPipeline], where fresh cloud results take precedence
+ * over the local int8 model.
  *
  * Single-flight: one request in the air at a time; frames arriving while a
  * request is pending are dropped, so the effective rate self-tunes to the
@@ -54,8 +61,8 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
                 val t0 = System.currentTimeMillis()
                 val answer = ground(upload)
                 val rtt = System.currentTimeMillis() - t0
-                val objects = parseDetections(answer, upload.width, upload.height)
-                pipeline.submitCloudDetections(objects, rtt)
+                val (objects, zones) = parseScene(answer, upload.width, upload.height)
+                pipeline.submitCloudDetections(withSurfaceObstacles(objects, zones), zones, rtt)
             } catch (e: Throwable) {
                 Log.w(TAG, "cloud detect failed: ${e.message}")
                 pipeline.noteCloudFailure()
@@ -126,17 +133,35 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
     }
 
     /**
-     * Parse the model's JSON array into [DetectedObj]s. Qwen2.5-VL grounding
-     * emits pixel coordinates of the input image, but hedge against the two
-     * other conventions it has used (normalized 0–1, and the legacy 0–1000
-     * scale) by checking the response's coordinate range.
+     * Parse the model's JSON into [DetectedObj]s + per-zone surface proximity.
+     * Qwen2.5-VL grounding emits pixel coordinates of the input image, but hedge
+     * against the two other conventions it has used (normalized 0–1, and the
+     * legacy 0–1000 scale) by checking the response's coordinate range.
      */
-    private fun parseDetections(answer: String, imgW: Int, imgH: Int): List<DetectedObj> {
-        val start = answer.indexOf('[')
-        val end = answer.lastIndexOf(']')
-        if (start < 0 || end <= start) return emptyList()
-        val arr = gson.fromJson(answer.substring(start, end + 1), JsonArray::class.java)
+    private fun parseScene(
+        answer: String,
+        imgW: Int,
+        imgH: Int,
+    ): Pair<List<DetectedObj>, DepthZones?> {
+        val start = answer.indexOf('{')
+        val end = answer.lastIndexOf('}')
+        if (start < 0 || end <= start) return emptyList<DetectedObj>() to null
+        val root = gson.fromJson(answer.substring(start, end + 1), JsonObject::class.java)
 
+        val zones = runCatching {
+            val z = root.getAsJsonObject("zones")
+            DepthZones(
+                left = z.get("left").asFloat.coerceIn(0f, 1f),
+                center = z.get("center").asFloat.coerceIn(0f, 1f),
+                right = z.get("right").asFloat.coerceIn(0f, 1f),
+            )
+        }.getOrNull()
+
+        val arr = root.getAsJsonArray("objects") ?: return emptyList<DetectedObj>() to zones
+        return parseDetections(arr, imgW, imgH) to zones
+    }
+
+    private fun parseDetections(arr: JsonArray, imgW: Int, imgH: Int): List<DetectedObj> {
         data class RawDet(val label: String, val c: FloatArray)
         val raw = arr.mapNotNull { el ->
             runCatching {
@@ -178,6 +203,36 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
         }
     }
 
+    /**
+     * A zone the VLM scored as near but that no detection covers is exactly the
+     * "blank wall" case — surface proximity without an object to box. Represent
+     * it as a synthetic obstacle spanning that third of the view so the collision
+     * pinger, overlay, and belt treat it like any detected object.
+     */
+    private fun withSurfaceObstacles(
+        objects: List<DetectedObj>,
+        zones: DepthZones?,
+    ): List<DetectedObj> {
+        if (zones == null) return objects
+        val synthetic = listOf(
+            Triple("left", zones.left, 0f to 1f / 3f),
+            Triple("center", zones.center, 1f / 3f to 2f / 3f),
+            Triple("right", zones.right, 2f / 3f to 1f),
+        ).mapNotNull { (zone, proximity, xr) ->
+            if (proximity < BeltMapper.OBJECT_NEAR_THRESHOLD) return@mapNotNull null
+            val covered = objects.any { it.zone == zone && it.nearness >= proximity - 0.1f }
+            if (covered) return@mapNotNull null
+            DetectedObj(
+                label = "obstacle",
+                zone = zone,
+                nearness = proximity,
+                conf = CLOUD_CONF,
+                box = BoundingBox(xr.first, 0.1f, xr.second, 1f),
+            )
+        }
+        return objects + synthetic
+    }
+
     companion object {
         private const val TAG = "SixthSenseScene"
         private const val BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -190,11 +245,23 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
         // sees, so treat every box as high-confidence downstream.
         private const val CLOUD_CONF = 0.9f
         private const val GROUNDING_PROMPT =
-            "Detect every distinct visible object in this image: people, vehicles, " +
-                "furniture, doors, stairs, poles, animals, signs — anything a walking " +
-                "person could collide with or care about. Reply with ONLY a JSON array, " +
-                "no prose and no markdown fences. Each element must be exactly " +
-                "{\"label\": \"<short name>\", \"bbox_2d\": [x1, y1, x2, y2]} " +
-                "with pixel coordinates in this image."
+            "You are the vision system of navigation glasses for a blind person. " +
+                "Analyze this image and do two things.\n" +
+                "1. Detect every distinct visible object: people, vehicles, furniture, " +
+                "doors, stairs, poles, animals, signs — anything a walking person could " +
+                "collide with or care about.\n" +
+                "2. Judge obstacle proximity for the LEFT, CENTER and RIGHT thirds of the " +
+                "view. Consider ALL physical surfaces, including featureless ones a " +
+                "detector would miss: blank or painted walls, glass, fences, pillars, " +
+                "closed doors. IMPORTANT: if a third of the view is filled by a uniform, " +
+                "textureless expanse with no visible floor, horizon, or scene depth, that " +
+                "is almost always a wall or large surface at very close range — score it " +
+                "0.9-1.0, never 0. Score each third: 1.0 = touching or within one step, " +
+                "0.7 = about 2-3 steps away, 0.5 = about 4-5 steps, 0.2 = several meters " +
+                "of clearance, 0.0 = confirmed open walkable space.\n" +
+                "Reply with ONLY minified JSON, no prose and no markdown fences, exactly: " +
+                "{\"objects\":[{\"label\":\"<short name>\",\"bbox_2d\":[x1,y1,x2,y2]}]," +
+                "\"zones\":{\"left\":0.0,\"center\":0.0,\"right\":0.0}} " +
+                "bbox_2d uses pixel coordinates of this image."
     }
 }
