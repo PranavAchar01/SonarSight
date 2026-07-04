@@ -68,23 +68,36 @@ class DecodersTest {
     }
 
     @Test
-    fun depth_inverse_map_makes_closest_band_highest_nearness() {
+    fun metric_depth_maps_meters_to_absolute_nearness() {
         val w = 30; val h = 30
         val depth = FloatArray(w * h)
-        // Inverse depth: LARGER = CLOSER. Plant a close obstacle on the LEFT.
+        // Metric depth in METERS (smaller = closer). Wall-close on the LEFT.
         for (r in 0 until h) {
             for (c in 0 until w) {
                 depth[r * w + c] = when {
-                    c < w / 3 -> 1.0f       // left: closest
-                    c < 2 * w / 3 -> 0.2f   // center
-                    else -> 0.1f            // right: farthest
+                    c < w / 3 -> 0.4f       // left: touching-range wall
+                    c < 2 * w / 3 -> 1.5f   // center: a few steps
+                    else -> 3.0f            // right: clear
                 }
             }
         }
         val zones = DepthDecoder.toZones(depth, w, h)
-        assertEquals(1.0f, zones.left, 1e-3f)     // normalized nearest
-        assertEquals(0.0f, zones.right, 1e-3f)    // normalized farthest
+        assertEquals(1.0f, zones.left, 1e-3f)     // <= NEAR_M saturates
+        assertEquals(0.0f, zones.right, 1e-3f)    // >= FAR_M is clear
         assertTrue("center between right and left", zones.center > zones.right && zones.center < zones.left)
+    }
+
+    @Test
+    fun metric_depth_featureless_wall_reads_near_in_every_zone() {
+        val w = 30; val h = 30
+        // The failure case that killed relative depth: a uniform wall at 0.5m.
+        // Per-frame normalization turned this into noise; metric depth must
+        // report ALL zones as near.
+        val depth = FloatArray(w * h) { 0.5f }
+        val zones = DepthDecoder.toZones(depth, w, h)
+        assertTrue("left near", zones.left > 0.9f)
+        assertTrue("center near", zones.center > 0.9f)
+        assertTrue("right near", zones.right > 0.9f)
     }
 
     @Test

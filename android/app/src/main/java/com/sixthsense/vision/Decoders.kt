@@ -16,8 +16,10 @@ import kotlin.math.min
  * `module.forward(...)[0].toTensor().dataAsFloatArray`.
  *
  * Two models feed the SceneState contract:
- *  - Depth-Anything-V2-Small: 1x3x518x518 in -> inverse RELATIVE depth [518x518]
- *    (LARGER = CLOSER, unitless, per-frame scale -> normalize within the frame).
+ *  - Depth-Anything-V2-Metric-Indoor-Small: 1x3x252x252 in -> METERS per pixel
+ *    [252x252] (smaller = closer; absolute scale, so a featureless wall filling
+ *    the frame still reads as "0.5m everywhere" — the case relative depth's
+ *    per-frame normalization turned into noise).
  *  - YOLOv11n (raw, no NMS): 1x3x640x640 in -> [1,84,8400] channel-major
  *    (4 bbox cxcywh in 0..640 + 80 COCO class scores; NO objectness).
  */
@@ -128,31 +130,33 @@ object YoloDecoder {
 }
 
 // ===========================================================================
-// Depth-Anything-V2 post-processing (inverse relative depth: LARGER = CLOSER)
+// Depth-Anything-V2-Metric post-processing (METERS per pixel: smaller = closer)
 // ===========================================================================
 object DepthDecoder {
 
+    /** Distance at which nearness saturates to 1.0 (about to collide). */
+    const val NEAR_M = 0.4f
+
+    /** Distance at which nearness reaches 0 (comfortably clear). */
+    const val FAR_M = 2.5f
+
+    /** Meters -> nearness in 0..1. Absolute, NOT per-frame normalized. */
+    fun metersToNearness(meters: Float): Float =
+        ((FAR_M - meters) / (FAR_M - NEAR_M)).coerceIn(0f, 1f)
+
     /**
-     * Inverse-depth map -> per-zone nearness in 0..1 (1 = nearest), normalized
-     * WITHIN the frame (values are relative/unitless). Uses the lower two-thirds
-     * rows (walking space) and the ~pct-th percentile of each L/C/R column band.
+     * Metric depth map -> per-zone nearness in 0..1 (1 = about to collide).
+     * Uses the lower two-thirds rows (walking space); each L/C/R band's distance
+     * is the pct-th percentile of its meters — the nearest ~10% of surface, so a
+     * wall filling the band registers even when the rest of the band is clear.
      */
-    fun toZones(depth: FloatArray, w: Int, h: Int, pct: Float = 0.90f): DepthZones {
+    fun toZones(depth: FloatArray, w: Int, h: Int, pct: Float = 0.10f): DepthZones {
         val rowStart = h / 3                      // skip top third (sky/ceiling)
         val third = w / 3
-        val leftP = bandPercentile(depth, w, rowStart, h, 0, third, pct)
-        val centerP = bandPercentile(depth, w, rowStart, h, third, 2 * third, pct)
-        val rightP = bandPercentile(depth, w, rowStart, h, 2 * third, w, pct)
-
-        val lo = minOf(leftP, centerP, rightP)
-        val hi = maxOf(leftP, centerP, rightP)
-        val span = (hi - lo).let { if (it < 1e-6f) 1f else it }
-        fun norm(v: Float) = ((v - lo) / span).coerceIn(0f, 1f)
-
         return DepthZones(
-            left = norm(leftP),
-            center = norm(centerP),
-            right = norm(rightP),
+            left = metersToNearness(bandPercentile(depth, w, rowStart, h, 0, third, pct)),
+            center = metersToNearness(bandPercentile(depth, w, rowStart, h, third, 2 * third, pct)),
+            right = metersToNearness(bandPercentile(depth, w, rowStart, h, 2 * third, w, pct)),
             curbAhead = detectCurbAhead(depth, w, h),
             stepDown = false,
         )
@@ -174,24 +178,10 @@ object DepthDecoder {
         return vals[idx]
     }
 
-    /** Frame-wide (lo, hi) inverse depth over walking space, for normalization. */
-    fun frameRange(depth: FloatArray, w: Int, h: Int): Pair<Float, Float> {
-        var lo = Float.MAX_VALUE; var hi = -Float.MAX_VALUE
-        val r0 = h / 3
-        for (r in r0 until h) {
-            val base = r * w
-            for (c in 0 until w) {
-                val v = depth[base + c]
-                if (v < lo) lo = v
-                if (v > hi) hi = v
-            }
-        }
-        return if (lo > hi) 0f to 1f else lo to hi
-    }
-
     /**
-     * Curb heuristic: a strong vertical inverse-depth gradient in the
-     * center-bottom region (surface drops/rises sharply -> an edge/step).
+     * Curb heuristic: a strong vertical depth gradient in the center-bottom
+     * region (surface drops/rises sharply -> an edge/step). Gradient is
+     * normalized by the band's mean depth, so it works in meters too.
      */
     fun detectCurbAhead(
         depth: FloatArray, w: Int, h: Int,
@@ -217,21 +207,19 @@ object DepthDecoder {
     }
 
     /**
-     * Object nearness = inverse depth sampled inside its bbox (DEPTH-MAP coords),
-     * normalized against the frame's (lo, hi).
+     * Object nearness = the object's distance in meters (10th-percentile of the
+     * metric depth inside its bbox, DEPTH-MAP coords) mapped to 0..1.
      */
     fun nearnessInBox(
         depth: FloatArray, w: Int, h: Int,
         bx1: Float, by1: Float, bx2: Float, by2: Float,
-        frameLo: Float, frameHi: Float, pct: Float = 0.90f,
+        pct: Float = 0.10f,
     ): Float {
         val c0 = bx1.toInt().coerceIn(0, w - 1)
         val c1 = bx2.toInt().coerceIn(c0 + 1, w)
         val r0 = by1.toInt().coerceIn(0, h - 1)
         val r1 = by2.toInt().coerceIn(r0 + 1, h)
-        val p = bandPercentile(depth, w, r0, r1, c0, c1, pct)
-        val span = (frameHi - frameLo).let { if (it < 1e-6f) 1f else it }
-        return ((p - frameLo) / span).coerceIn(0f, 1f)
+        return metersToNearness(bandPercentile(depth, w, r0, r1, c0, c1, pct))
     }
 }
 
@@ -254,7 +242,6 @@ object SceneAssembler {
         yoloInput: Int = 640,
     ): List<DetectedObj> {
         if (dets.isEmpty()) return emptyList()
-        val (lo, hi) = DepthDecoder.frameRange(depth, depthW, depthH)
         val mx = depthW.toFloat() / yoloInput
         val my = depthH.toFloat() / yoloInput
         return dets.map { d ->
@@ -262,7 +249,6 @@ object SceneAssembler {
             val nearness = DepthDecoder.nearnessInBox(
                 depth, depthW, depthH,
                 d.x1 * mx, d.y1 * my, d.x2 * mx, d.y2 * my,
-                lo, hi,
             )
             DetectedObj(
                 label = COCO_LABELS.getOrElse(d.classId) { "object" },

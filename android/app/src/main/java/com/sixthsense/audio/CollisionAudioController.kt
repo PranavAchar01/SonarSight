@@ -55,10 +55,28 @@ class CollisionAudioController(
 
     fun isEnabled(): Boolean = enabled
 
-    private fun pickThreat(s: SceneState): DetectedObj? =
-        s.objects
+    /**
+     * The most-threatening thing in the scene: a detected object OR a near depth
+     * zone. The zone path is what makes featureless obstacles ping — a blank
+     * wall never yields a detection, but metric depth (or the cloud VLM's surface
+     * judgment) still reports its zone as near, and that is threat enough.
+     */
+    private fun pickThreat(s: SceneState): DetectedObj? {
+        val objThreat = s.objects
             .filter { it.nearness >= BeltMapper.OBJECT_NEAR_THRESHOLD && it.conf >= MIN_CONF }
             .maxByOrNull { it.nearness }
+        val zoneThreat = listOf(
+            "left" to s.depth.left,
+            "center" to s.depth.center,
+            "right" to s.depth.right,
+        )
+            .filter { it.second >= BeltMapper.OBJECT_NEAR_THRESHOLD }
+            .maxByOrNull { it.second }
+            ?.let { (zone, nearness) ->
+                DetectedObj(label = "obstacle", zone = zone, nearness = nearness, conf = 1f)
+            }
+        return listOfNotNull(objThreat, zoneThreat).maxByOrNull { it.nearness }
+    }
 
     private fun azimuthOf(o: DetectedObj): Float = when (o.zone) {
         "left" -> -0.85f

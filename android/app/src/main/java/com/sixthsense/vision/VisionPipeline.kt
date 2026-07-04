@@ -59,6 +59,9 @@ class VisionPipeline(
     private val bus: SceneBus,
 ) {
     private val analysisExecutor = Executors.newSingleThreadExecutor()
+    // Metric depth runs concurrently with YOLO on the glasses feed (its ~1s pass
+    // must not stall the ~5fps detection loop), so it owns its own executor.
+    private val depthExecutor = Executors.newSingleThreadExecutor()
     private val depthConv = FrameToTensor(DEPTH_SIZE, Norm.IMAGENET)
     private val yoloConv = FrameToTensor(YOLO_SIZE, Norm.SCALE_0_1)
 
@@ -66,6 +69,8 @@ class VisionPipeline(
     @Volatile private var yoloModule: EtModule? = null
     @Volatile private var running = false
     @Volatile private var externalBusy = false
+    @Volatile private var depthBusy = false
+    @Volatile private var lastDepthPassMs = 0L
     @Volatile private var modelsRequested = false
     private var lastZones = DepthZones(0f, 0f, 0f)
     private var lastDepthData: FloatArray? = null
@@ -136,12 +141,14 @@ class VisionPipeline(
         ContextCompat.getMainExecutor(context).execute {
             runCatching { cameraProvider?.unbindAll() }
         }
-        // analyze() and this close run on the SAME single-thread executor, so the
-        // close is serialized strictly after any in-flight/queued analyze — no
+        // Each module is closed on the executor that runs its forwards, so the
+        // close is serialized strictly after any in-flight/queued inference — no
         // half-destroyed-module access is possible.
         analysisExecutor.execute {
-            depthModule?.close(); depthModule = null
             yoloModule?.close(); yoloModule = null
+        }
+        depthExecutor.execute {
+            depthModule?.close(); depthModule = null
         }
         _status.value = VisionStatus(note = "stopped")
         Log.i(TAG, "VisionPipeline stopped.")
@@ -150,9 +157,13 @@ class VisionPipeline(
     fun shutdown() {
         stop()
         analysisExecutor.shutdown()
+        depthExecutor.shutdown()
         runCatching {
             if (!analysisExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
                 analysisExecutor.shutdownNow()
+            }
+            if (!depthExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                depthExecutor.shutdownNow()
             }
         }
     }
@@ -231,18 +242,48 @@ class VisionPipeline(
     fun submitExternalFrame(bitmap: Bitmap) {
         if (!running || externalBusy) return
         externalBusy = true
+        maybeRunMetricDepth(bitmap)
         analysisExecutor.execute {
             try {
                 maybeStreamExternalFrame(bitmap)
-                // Depth (Depth-Anything) measures ~3.8s/pass on the SD695 vs ~220ms
-                // for YOLO — one pass stalls the boxes for seconds, so the glasses
-                // loop is YOLO-only. Object nearness comes from box size; the phone-
-                // camera path still runs the full depth+YOLO pipeline.
+                // Depth runs concurrently on its own executor (see
+                // maybeRunMetricDepth); this loop stays YOLO-only so boxes keep
+                // their ~5fps cadence. Object nearness comes from box size.
                 runModels(null, { yoloConv.toTensor(bitmap) })
             } catch (e: Throwable) {
                 Log.w(TAG, "external frame error: ${e.message}")
             } finally {
                 externalBusy = false
+            }
+        }
+    }
+
+    /**
+     * Metric depth (Depth-Anything-V2-Metric-Indoor, 252x252, meters out) at its
+     * own ~1Hz cadence, concurrent with YOLO. This is what catches the obstacles
+     * detection can't: a featureless wall, a closed door, glass — geometry says
+     * "surface at 0.5m" no matter what it looks like. Updates [lastZones], which
+     * every subsequent SceneState emission picks up (pathClear, belt, pings).
+     */
+    private fun maybeRunMetricDepth(bitmap: Bitmap) {
+        if (depthModule == null || depthBusy) return
+        val now = System.currentTimeMillis()
+        if (now - lastDepthPassMs < DEPTH_MIN_INTERVAL_MS) return
+        depthBusy = true
+        depthExecutor.execute {
+            try {
+                val depth = depthModule ?: return@execute
+                val t0 = System.nanoTime()
+                val out = depth.forward(depthConv.toTensor(bitmap))
+                val ms = (System.nanoTime() - t0) / 1_000_000.0
+                val (dw, dh) = depthDims(out)
+                lastZones = DepthDecoder.toZones(out.data, dw, dh)
+                _status.value = _status.value.copy(depthMs = ms)
+            } catch (e: Throwable) {
+                Log.w(TAG, "metric depth error: ${e.message}")
+            } finally {
+                lastDepthPassMs = System.currentTimeMillis()
+                depthBusy = false
             }
         }
     }
@@ -304,7 +345,17 @@ class VisionPipeline(
         if (cloudFresh && cloud != null) {
             objects = cloud
             yoloMs = cloudRttMs.toDouble()
-            cloudZones?.let { zones = it }  // VLM surface proximity -> pathClear/belt
+            // Merge VLM surface proximity with local metric depth conservatively:
+            // whichever tier says a zone is nearer wins.
+            cloudZones?.let { cz ->
+                zones = DepthZones(
+                    left = maxOf(zones.left, cz.left),
+                    center = maxOf(zones.center, cz.center),
+                    right = maxOf(zones.right, cz.right),
+                    curbAhead = zones.curbAhead,
+                    stepDown = zones.stepDown,
+                )
+            }
         } else if (yolo != null) {
             val t1 = System.nanoTime()
             val yoloOut = yolo.forward(yoloTensor())
@@ -446,7 +497,8 @@ class VisionPipeline(
 
     companion object {
         private const val TAG = "SixthSenseScene"
-        private const val DEPTH_SIZE = 518
+        private const val DEPTH_SIZE = 252
+        private const val DEPTH_MIN_INTERVAL_MS = 900L
         private const val YOLO_SIZE = 640
         private const val LIVE_CONF = 0.85f
         private const val FRAME_WIDTH = 480
@@ -455,11 +507,10 @@ class VisionPipeline(
         private const val CLOUD_FRESH_MIN_MS = 900L      // cloud validity floor (fast RTT)
         private const val CLOUD_FRESH_MAX_MS = 8000L     // cap so stale boxes can't linger
 
-        // Candidate asset names (Stream B ships depth.pte/yolo.pte; docs use longer names).
+        // Candidate asset names (metric depth only — the relative model's per-frame
+        // normalization can't register a wall; see scripts/export_depth_metric.py).
         private val DEPTH_ASSETS = listOf(
-            "models/depth.pte",
-            "models/depth_anything_v2.pte",
-            "models/depth_anything_v2_small.pte",
+            "models/depth_metric.pte",
         )
         private val YOLO_ASSETS = listOf(
             "models/yolo.pte",
