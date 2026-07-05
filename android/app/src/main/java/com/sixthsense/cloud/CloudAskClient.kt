@@ -37,6 +37,18 @@ class CloudAskClient {
         onAnswer: (String) -> Unit,
         onError: (String) -> Unit,
     ) {
+        transcribeAsync(wav, onError) { question ->
+            onTranscript(question)
+            answerScene(question, frame, onAnswer, onError)
+        }
+    }
+
+    /** Speech -> text only; [onTranscript] fires off-main with the recognized question. */
+    fun transcribeAsync(
+        wav: ByteArray,
+        onError: (String) -> Unit,
+        onTranscript: (String) -> Unit,
+    ) {
         if (!configured) {
             onError("No Qwen API key configured (qwen_api_key in local.properties).")
             return
@@ -44,22 +56,60 @@ class CloudAskClient {
         executor.execute {
             try {
                 val question = transcribe(wav)
-                if (question.isBlank()) {
-                    onError("Didn't catch that — try again closer to the mic.")
-                    return@execute
-                }
-                onTranscript(question)
+                if (question.isBlank()) onError("Didn't catch that — try again closer to the mic.")
+                else onTranscript(question)
+            } catch (e: Throwable) {
+                Log.w(TAG, "transcribe failed: ${e.message}")
+                onError("Cloud ask failed: ${e.message}")
+            }
+        }
+    }
 
-                if (frame == null) {
-                    onError("No glasses frame yet — start glasses vision first.")
-                    return@execute
-                }
+    /** Answer a scene question about [frame] (the extreme-detail eyes-of-the-user prompt). */
+    fun answerScene(
+        question: String,
+        frame: Bitmap?,
+        onAnswer: (String) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        if (frame == null) {
+            onError("No glasses frame yet — start glasses vision first.")
+            return
+        }
+        executor.execute {
+            try {
                 val answer = describe(question, frame)
                 if (answer.isBlank()) onError("Empty answer from the scene model.")
                 else onAnswer(answer)
             } catch (e: Throwable) {
-                Log.w(TAG, "ask failed: ${e.message}")
+                Log.w(TAG, "answer failed: ${e.message}")
                 onError("Cloud ask failed: ${e.message}")
+            }
+        }
+    }
+
+    /** "Read this" mode: everything legible in the frame, verbatim, top to bottom. */
+    fun readText(
+        frame: Bitmap?,
+        onAnswer: (String) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        if (!configured) {
+            onError("No Qwen API key configured.")
+            return
+        }
+        if (frame == null) {
+            onError("No glasses frame yet — start glasses vision first.")
+            return
+        }
+        executor.execute {
+            try {
+                val answer = describe(READ_PROMPT, frame)
+                if (answer.isBlank()) onError("No readable text found.")
+                else onAnswer(answer)
+            } catch (e: Throwable) {
+                Log.w(TAG, "readText failed: ${e.message}")
+                onError("Read failed: ${e.message}")
             }
         }
     }
@@ -160,6 +210,12 @@ class CloudAskClient {
         private const val VLM_MODEL = "qwen-vl-max"
         private const val IMG_WIDTH = 960
         private const val IMG_QUALITY = 80
+        private const val READ_PROMPT =
+            "Read ALL text visible in this image, verbatim, organized top to bottom and " +
+                "left to right. Include signs, labels, screens, and papers. Give each " +
+                "distinct piece of text on its own line with a very short location hint, " +
+                "like 'Sign ahead: EXIT'. If nothing is readable, say exactly: " +
+                "No readable text in view."
         private const val SYSTEM_PROMPT =
             "You are SonarSight, the eyes of a blind or low-vision person wearing camera " +
                 "glasses. The image is exactly what is in front of them right now. Answer " +

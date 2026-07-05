@@ -47,6 +47,20 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
     @Volatile
     var enabled = false
 
+    // Voice-added hazard watchlist ("watch out for bikes and dogs") — injected
+    // into the grounding prompt so the VLM prioritizes them.
+    @Volatile
+    private var watchlist: List<String> = emptyList()
+
+    /** Fires (off-main) when the latest grounding round saw a person in frame. */
+    @Volatile
+    var onPersonSeen: (() -> Unit)? = null
+
+    fun addWatch(labels: List<String>) {
+        watchlist = (watchlist + labels.map { it.trim().lowercase() })
+            .filter { it.isNotBlank() }.distinct().takeLast(8)
+    }
+
     val configured: Boolean
         get() = BuildConfig.QWEN_API_KEY.isNotBlank()
 
@@ -63,6 +77,7 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
                 val rtt = System.currentTimeMillis() - t0
                 val (objects, zones) = parseScene(answer, upload.width, upload.height)
                 pipeline.submitCloudDetections(withSurfaceObstacles(objects, zones), zones, rtt)
+                if (objects.any { PERSON_WORDS.any(it.label::contains) }) onPersonSeen?.invoke()
             } catch (e: Throwable) {
                 Log.w(TAG, "cloud detect failed: ${e.message}")
                 pipeline.noteCloudFailure()
@@ -86,6 +101,10 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
         upload.compress(Bitmap.CompressFormat.JPEG, UPLOAD_QUALITY, baos)
         val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
 
+        val watch = watchlist
+        val prompt = if (watch.isEmpty()) GROUNDING_PROMPT
+        else GROUNDING_PROMPT + " The user especially wants warnings about: " +
+            watch.joinToString(", ") + " — always include these if visible."
         val userContent = JsonArray().apply {
             add(JsonObject().apply {
                 addProperty("type", "image_url")
@@ -95,7 +114,7 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
             })
             add(JsonObject().apply {
                 addProperty("type", "text")
-                addProperty("text", GROUNDING_PROMPT)
+                addProperty("text", prompt)
             })
         }
         val body = JsonObject().apply {
@@ -241,6 +260,7 @@ class CloudVisionClient(private val pipeline: VisionPipeline) {
         private const val UPLOAD_QUALITY = 65
         private const val AREA_GAIN = 3.0f  // mirrors SceneAssembler.AREA_GAIN
         private const val MAX_DETECTIONS = 25
+        private val PERSON_WORDS = listOf("person", "man", "woman", "people", "pedestrian")
         // Grounding gives no per-box score; the VLM only names what it actually
         // sees, so treat every box as high-confidence downstream.
         private const val CLOUD_CONF = 0.9f

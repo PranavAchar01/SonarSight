@@ -1,9 +1,9 @@
 /* ============================================================================
-   SixthSense — Live Vision Dashboard (vanilla JS, no framework)
+   SonarSight — Live Vision Dashboard (vanilla JS, no framework)
 
    A real, deployable client for the on-device navigation copilot. It connects to
    the phone over WebSocket and renders EXACTLY what the device sends:
-     - the Galaxy S25 Ultra camera frame (scene.frame, base64 JPEG)
+     - the Ray-Ban Meta glasses POV frame (scene.frame, base64 JPEG)
      - the live SceneState (depth zones, objects, OCR, path, confidence, belt)
      - optional voice events the device emits (scene.voice)
 
@@ -17,8 +17,8 @@
   var RECONNECT_MS = 2000;
   var STALE_MS = 4000;             // no frame for this long => "signal lost"
   var VOICE_HOLD_MS = 6000;        // how long a device voice event stays "active"
-  var LS_URL = "sixthsense.deviceUrl";
-  var DEFAULT_URL = "ws://192.168.1.50:8080";
+  var LS_URL = "sonarsight.deviceUrl";
+  var DEFAULT_URL = "ws://localhost:8080";
 
   // BeltMapper.kt constants (device computes belt; we only fall back if omitted).
   var NEAR = 0.55, LOW_CONF = 0.40, CLEAR_HUM = 30, CURB_CENTER_MIN = 180, CAUTION_CENTER = 80;
@@ -43,14 +43,14 @@
 
   // The technologies actually being integrated (docs/model_export_plan.md).
   var TECH = [
-    { key: "depth",   name: "Depth-Anything-V2", rt: "ExecuTorch · QNN/NPU", role: "Monocular depth → per-zone nearness" },
-    { key: "yolo",    name: "YOLOv11n / v8n",    rt: "ExecuTorch · QNN/NPU", role: "Obstacle detection & localisation" },
-    { key: "ocr",     name: "TrOCR",             rt: "ExecuTorch (ML Kit fb)", role: "Reads signs / text on demand" },
-    { key: "whisper", name: "Whisper base/small",rt: "ExecuTorch",          role: "Speech → text (push-to-talk)" },
-    { key: "llama",   name: "Llama 3.2 1B",      rt: "ExecuTorch",          role: "Voice-agent reasoning" },
-    { key: "tts",     name: "Android TextToSpeech", rt: "On-device",        role: "Speaks the agent's answer" },
-    { key: "npu",     name: "ExecuTorch runtime",rt: "Snapdragon SM8750",   role: "On-device inference · Hexagon v79 NPU" },
-    { key: "belt",    name: "BLE haptic belt",   rt: "Nordic UART · ESP32", role: "Steers via L/C/R vibration" }
+    { key: "depth",   name: "Depth-Anything-V2 Metric", rt: "ExecuTorch · edge", role: "Meters per pixel → wall/door radar" },
+    { key: "yolo",    name: "YOLO11n int8",       rt: "ExecuTorch · edge",  role: "Real-time obstacle detection (~5fps)" },
+    { key: "ocr",     name: "qwen-vl-max grounding", rt: "Qwen Cloud",      role: "Open-vocab boxes + surface proximity" },
+    { key: "whisper", name: "qwen3-asr-flash",    rt: "Qwen Cloud",         role: "Speech → text (hold-to-ask)" },
+    { key: "llama",   name: "qwen-vl-max scene Q&A", rt: "Qwen Cloud",      role: "Extreme-detail surroundings answers" },
+    { key: "tts",     name: "Android TextToSpeech", rt: "On-device",        role: "Speaks answers via glasses speakers" },
+    { key: "npu",     name: "ExecuTorch XNNPACK", rt: "Snapdragon 695",     role: "On-device int8 inference" },
+    { key: "belt",    name: "3D spatial audio",   rt: "Glasses speakers",   role: "Directional collision pings (L/C/R)" }
   ];
 
   // -------------------------------------------------------------- state -----
@@ -107,7 +107,7 @@
       ts: num(raw.ts, 0),
       depth: { left: num(d.left, 0), center: num(d.center, 0), right: num(d.right, 0), curbAhead: !!d.curbAhead, stepDown: !!d.stepDown },
       objects: Array.isArray(raw.objects) ? raw.objects.map(function (o) {
-        return { label: String(o.label || "object"), zone: String(o.zone || "center"), nearness: num(o.nearness, 0), conf: num(o.conf, 0) };
+        return { label: String(o.label || "object"), zone: String(o.zone || "center"), nearness: num(o.nearness, 0), conf: num(o.conf, 0), box: (o.box && typeof o.box.x1 === "number") ? { x1: num(o.box.x1, 0), y1: num(o.box.y1, 0), x2: num(o.box.x2, 0), y2: num(o.box.y2, 0) } : null };
       }) : [],
       pathClear: !!raw.pathClear,
       ocr: { present: !!(raw.ocr && raw.ocr.present), text: (raw.ocr && raw.ocr.text) ? String(raw.ocr.text) : "" },
@@ -282,7 +282,7 @@
       whisper: { on: voiceOn, out: voiceOn ? '"' + state.voice.question + '"' : (has ? "push-to-talk ready" : "—") },
       llama:   { on: voiceOn, out: voiceOn ? state.voice.answer : (has ? "awaiting a question" : "—") },
       tts:     { on: voiceOn, out: voiceOn ? "speaking answer" : (has ? "ready" : "—") },
-      npu:     { on: has && fr, out: has ? "Snapdragon 8 Elite · " + state.fps.toFixed(1) + " fps" : "—" },
+      npu:     { on: has && fr, out: has ? "SD695 · XNNPACK int8 · " + state.fps.toFixed(1) + " fps" : "—" },
       belt:    { on: beltLive, out: has ? "[" + p.join(", ") + "] · " + (p[3] === 2 ? "double" : p[3] === 1 ? "pulse" : "steady") : "—" }
     };
     $all(".tech").forEach(function (el) {
@@ -348,7 +348,11 @@
     }
     if (L.detection) {
       s.objects.forEach(function (o) {
-        var r = objRect(o.zone, o.nearness, W, H), col = heatColor(o.nearness);
+        // Real device bbox (normalized 0..1) when present; zone heuristic otherwise.
+        var r = o.box
+          ? { x: o.box.x1 * W, y: o.box.y1 * H, w: (o.box.x2 - o.box.x1) * W, h: (o.box.y2 - o.box.y1) * H }
+          : objRect(o.zone, o.nearness, W, H);
+        var col = heatColor(o.nearness);
         ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.strokeRect(r.x, r.y, r.w, r.h);
         label(ctx, r.x, r.y - 5, o.label + " · " + o.nearness.toFixed(2) + " · " + pct(o.conf) + "%", col, 12, "rgba(255,255,255,0.92)");
       });
@@ -439,12 +443,12 @@
     edge(scnX + nodeW / 2, midY, outX - nodeW / 2, subY[1], voiceOn, 0.5);
     edge(scnX + nodeW / 2, midY, outX - nodeW / 2, subY[2], has, 0.7);
     label(ctx, visX - nodeW / 2, subY[0] - nodeH, "ExecuTorch · NPU", C.meta, 10);
-    node(camX, midY, "S25 Camera", "frames", has && fr);
+    node(camX, midY, "Ray-Ban POV", "frames", has && fr);
     node(visX, subY[0], "Depth", "nearness", has && fr);
     node(visX, subY[1], "YOLO", "objects", has && s && s.objects.length > 0);
     node(visX, subY[2], "OCR", "on demand", has && s && s.ocr.present);
     node(scnX, midY, "SceneState", "contract", has);
-    node(outX, subY[0], "Belt", "BLE", beltLive);
+    node(outX, subY[0], "3D Pings", "audio", beltLive);
     node(outX, subY[1], "Voice", "agent", voiceOn);
     node(outX, subY[2], "Dashboard", "this view", has);
   }
@@ -471,8 +475,9 @@
       var el = document.getElementById(p[0]); if (el) CANVASES.push({ el: el, fn: p[1] });
     });
 
+    var qs = null; try { qs = new URLSearchParams(location.search).get("ws"); } catch (e) {}
     var saved; try { saved = localStorage.getItem(LS_URL); } catch (e) {}
-    state.url = saved || DEFAULT_URL;
+    state.url = qs || saved || DEFAULT_URL;
     $("#url-input").value = state.url;
 
     $("#layerbar").addEventListener("click", function (e) {

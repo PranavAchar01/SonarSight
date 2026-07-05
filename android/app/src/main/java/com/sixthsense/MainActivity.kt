@@ -3,10 +3,12 @@ package com.sixthsense
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
-import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.Button
@@ -25,8 +27,10 @@ import com.google.gson.GsonBuilder
 import com.meta.wearable.dat.core.Wearables
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
+import com.sixthsense.cloud.VoiceCommandRouter
 import com.sixthsense.core.SceneState
 import com.sixthsense.debug.AppGraph
+import com.sixthsense.ui.ZoneBarsView
 import com.sixthsense.vision.DetectionOverlayView
 import com.sixthsense.vision.VisionStatus
 import com.sixthsense.voice.VoiceRecorder
@@ -36,9 +40,11 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * Operator / developer console — NOT the end-user interface. This screen exists
- * for development and the demo operator (start glasses or camera vision, toggle
- * mock, watch the live SceneState + backend/latency/fps).
+ * Judge-facing operator console. One screen tells the story: live Ray-Ban POV
+ * with AR boxes, an obstacle radar driven by metric depth, edge/cloud status
+ * chips, and the three big actions (start vision, 3D audio, hold-to-ask).
+ * Developer plumbing (mock mode, phone camera, raw SceneState) is tucked into
+ * a collapsible section at the bottom.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -48,11 +54,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlay: DetectionOverlayView
     private lateinit var glassesStatusView: TextView
     private lateinit var glassesPreview: ImageView
+    private lateinit var liveChip: TextView
+    private lateinit var pathBanner: TextView
+    private lateinit var zoneBars: ZoneBarsView
+    private lateinit var srcChip: TextView
+    private lateinit var fpsChip: TextView
+    private lateinit var latChip: TextView
+    private lateinit var detChip: TextView
+    private lateinit var startButton: Button
     private lateinit var audioButton: Button
     private lateinit var cloudButton: Button
     private lateinit var askButton: Button
+    private lateinit var voiceQuestion: TextView
+    private lateinit var voiceAnswer: TextView
     private var socket: SceneSocket? = null
     private var tts: TextToSpeech? = null
+    private var glassesRunning = false
     private val recorder = VoiceRecorder()
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -71,7 +88,7 @@ class MainActivity : AppCompatActivity() {
             AppGraph.glassesSource.initialize(this)
             toast(
                 if (AppGraph.glassesSource.isRegistered) "Glasses SDK ready."
-                else "Approve SixthSense in the Meta AI app, then start glasses vision."
+                else "Approve SonarSight in the Meta AI app, then start glasses vision."
             )
         } else {
             toast("Bluetooth permission denied — glasses session needs it.")
@@ -97,6 +114,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppGraph.init(this)
+        supportActionBar?.hide()
+        window.statusBarColor = BG
+        window.navigationBarColor = BG
         setContentView(buildUi())
         observeScene()
         observeVisionStatus()
@@ -111,30 +131,88 @@ class MainActivity : AppCompatActivity() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) tts?.language = Locale.US
         }
+        // "Sarah, on your left." — queued so it never cuts off an in-flight answer.
+        AppGraph.myPeople.onAnnounce = { line ->
+            runOnUiThread { tts?.speak(line, TextToSpeech.QUEUE_ADD, null, "sonarsight-person") }
+        }
     }
 
-    private fun buildUi(): ScrollView {
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
+    // ------------------------------------------------------------ UI build --
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, radius: Int, stroke: Int = 0): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+            if (stroke != 0) setStroke(dp(1), stroke)
         }
 
+    private fun chip(initial: String): TextView = TextView(this).apply {
+        text = initial
+        textSize = 11f
+        typeface = Typeface.MONOSPACE
+        setTextColor(SUB)
+        background = rounded(CARD, 8, CARD_STROKE)
+        setPadding(dp(10), dp(6), dp(10), dp(6))
+    }
+
+    private fun pill(button: Button, on: Boolean, onColor: Int) {
+        button.background = rounded(if (on) onColor else CARD, 14, if (on) onColor else CARD_STROKE)
+        button.setTextColor(if (on) Color.BLACK else TEXT)
+    }
+
+    private fun sectionLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 11f
+        setTextColor(SUB)
+        typeface = Typeface.DEFAULT_BOLD
+        letterSpacing = 0.12f
+        setPadding(dp(4), dp(14), 0, dp(6))
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun buildUi(): ScrollView {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(24))
+            setBackgroundColor(BG)
+        }
+        fun match(height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) =
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height)
+
+        // -- Header -----------------------------------------------------------
         root.addView(TextView(this).apply {
-            text = getString(R.string.title)
-            textSize = 24f
+            text = "SonarSight"
+            textSize = 26f
+            setTextColor(TEXT)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = getString(R.string.subtitle)
+            text = "See with sound · Ray-Ban Meta glasses × Qwen Cloud"
             textSize = 12f
-            setPadding(0, 0, 0, pad)
+            setTextColor(SUB)
+            setPadding(0, 0, 0, dp(10))
         })
 
-        // Live POV + AR detection overlay. The overlay draws detection boxes on
-        // top of whichever source is active (glasses stream or phone camera).
-        val camHeight = (240 * resources.displayMetrics.density).toInt()
-        val camContainer = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, camHeight)
+        // -- Path banner (the one-glance verdict) ------------------------------
+        pathBanner = TextView(this).apply {
+            text = "STANDBY — start glasses vision"
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(SUB)
+            background = rounded(CARD, 12, CARD_STROKE)
+            gravity = android.view.Gravity.CENTER
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            layoutParams = match()
+        }
+        root.addView(pathBanner)
+
+        // -- Live POV card ------------------------------------------------------
+        val camCard = FrameLayout(this).apply {
+            layoutParams = match(dp(250)).apply { topMargin = dp(10) }
+            background = rounded(CARD, 16, CARD_STROKE)
+            clipToOutline = true
         }
         previewView = PreviewView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -154,59 +232,187 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
             )
         }
-        camContainer.addView(previewView)
-        camContainer.addView(glassesPreview) // glasses POV sits over the camera preview
-        camContainer.addView(overlay)   // overlay sits on top of both
-        root.addView(camContainer)
-
-        statusView = TextView(this).apply {
-            text = getString(R.string.vision_idle)
-            textSize = 12f
-            setPadding(0, pad / 2, 0, pad / 2)
+        liveChip = TextView(this).apply {
+            text = "● OFFLINE"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(SUB)
+            background = rounded(0xCC0B0F14.toInt(), 8)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { setMargins(dp(10), dp(10), 0, 0) }
         }
-        root.addView(statusView)
+        camCard.addView(previewView)
+        camCard.addView(glassesPreview) // glasses POV sits over the camera preview
+        camCard.addView(overlay)        // overlay sits on top of both
+        camCard.addView(liveChip)
+        root.addView(camCard)
 
-        fun button(label: String, onClick: () -> Unit) = Button(this).apply {
+        // -- Status chips -------------------------------------------------------
+        val chips = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = match().apply { topMargin = dp(8) }
+        }
+        srcChip = chip("src —")
+        fpsChip = chip("0.0 fps")
+        latChip = chip("yolo —")
+        detChip = chip("0 obj")
+        listOf(srcChip, fpsChip, latChip, detChip).forEach {
+            it.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { marginEnd = dp(6) }
+            it.gravity = android.view.Gravity.CENTER
+            chips.addView(it)
+        }
+        root.addView(chips)
+
+        // -- Obstacle radar (metric depth) ---------------------------------------
+        root.addView(sectionLabel("OBSTACLE RADAR — METRIC DEPTH"))
+        zoneBars = ZoneBarsView(this).apply { layoutParams = match(dp(96)) }
+        root.addView(zoneBars)
+
+        // -- Primary controls -----------------------------------------------------
+        root.addView(sectionLabel("CONTROLS"))
+        fun bigButton(label: String, height: Int = 52): Button = Button(this).apply {
             text = label
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
-            setOnClickListener { onClick() }
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            isAllCaps = false
+            stateListAnimator = null
+            layoutParams = match(dp(height)).apply { topMargin = dp(8) }
         }
-
-        // Ray-Ban Meta glasses as the perception input (Meta Wearables DAT).
-        glassesStatusView = TextView(this).apply {
-            text = getString(R.string.glasses_idle)
-            textSize = 12f
-            setPadding(0, pad / 2, 0, 0)
+        startButton = bigButton("▶  Start Glasses Vision")
+        pill(startButton, true, TEAL)
+        startButton.setOnClickListener {
+            if (glassesRunning) {
+                AppGraph.glassesSource.stop()
+                AppGraph.visionPipeline.stop()
+                setGlassesRunning(false)
+            } else {
+                connectGlassesAndStart()
+            }
         }
-        root.addView(glassesStatusView)
-        root.addView(button(getString(R.string.btn_glasses_setup)) { setupGlasses() })
-        root.addView(button(getString(R.string.btn_glasses_start)) { connectGlassesAndStart() })
-        root.addView(button(getString(R.string.btn_glasses_stop)) {
-            AppGraph.glassesSource.stop()
-            AppGraph.visionPipeline.stop()
-        })
+        root.addView(startButton)
 
-        root.addView(button(getString(R.string.btn_start_vision)) { connectCameraAndStart() })
-        root.addView(button(getString(R.string.btn_stop_vision)) {
-            AppGraph.visionPipeline.stop()
-        })
-        audioButton = button(getString(R.string.btn_audio_off)) { toggleCollisionAudio() }
-        root.addView(audioButton)
-        cloudButton = button(getString(R.string.btn_cloud_off)) { toggleCloudVision() }
-        root.addView(cloudButton)
-        askButton = button(getString(R.string.btn_ask_hold)) { }
+        val toggles = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = match().apply { topMargin = dp(8) }
+        }
+        audioButton = Button(this).apply {
+            text = "🔊 3D Audio: OFF"
+            textSize = 13f
+            isAllCaps = false
+            stateListAnimator = null
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) }
+            setOnClickListener { toggleCollisionAudio() }
+        }
+        pill(audioButton, false, GREEN)
+        cloudButton = Button(this).apply {
+            text = "☁ Qwen Cloud: OFF"
+            textSize = 13f
+            isAllCaps = false
+            stateListAnimator = null
+            layoutParams = LinearLayout.LayoutParams(0, dp(48), 1f)
+            setOnClickListener { toggleCloudVision() }
+        }
+        pill(cloudButton, false, TEAL)
+        toggles.addView(audioButton)
+        toggles.addView(cloudButton)
+        root.addView(toggles)
+
+        askButton = bigButton(getString(R.string.btn_ask_hold), height = 64)
+        pill(askButton, true, PURPLE)
         wireHoldToAsk()
         root.addView(askButton)
-        root.addView(button(getString(R.string.btn_mock_on)) {
+
+        val readButton = bigButton("📖  Read Text Ahead", height = 48)
+        pill(readButton, false, AMBER)
+        readButton.setOnClickListener {
+            speak("Reading.")
+            AppGraph.cloudAsk.readText(
+                AppGraph.glassesSource.lastFrame,
+                onAnswer = ::speakAnswer, onError = ::speakError,
+            )
+        }
+        root.addView(readButton)
+
+        // -- Voice Q&A card ---------------------------------------------------------
+        root.addView(sectionLabel("ASK QWEN ABOUT YOUR SURROUNDINGS"))
+        val voiceCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD, 12, CARD_STROKE)
+            setPadding(dp(12), dp(10), dp(12), dp(12))
+            layoutParams = match()
+        }
+        voiceQuestion = TextView(this).apply {
+            text = "Hold the mic button and ask anything."
+            textSize = 12f
+            setTextColor(SUB)
+            typeface = Typeface.MONOSPACE
+        }
+        voiceAnswer = TextView(this).apply {
+            text = ""
+            textSize = 13f
+            setTextColor(TEXT)
+            setPadding(0, dp(6), 0, 0)
+        }
+        voiceCard.addView(voiceQuestion)
+        voiceCard.addView(voiceAnswer)
+        root.addView(voiceCard)
+
+        // -- Developer tools (collapsed) -----------------------------------------------
+        val devToggle = sectionLabel("DEVELOPER TOOLS ▸")
+        val devSection = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            layoutParams = match()
+        }
+        devToggle.setOnClickListener {
+            val show = devSection.visibility != android.view.View.VISIBLE
+            devSection.visibility = if (show) android.view.View.VISIBLE else android.view.View.GONE
+            devToggle.text = if (show) "DEVELOPER TOOLS ▾" else "DEVELOPER TOOLS ▸"
+        }
+        root.addView(devToggle)
+
+        fun devButton(label: String, onClick: () -> Unit) = Button(this).apply {
+            text = label
+            textSize = 13f
+            isAllCaps = false
+            stateListAnimator = null
+            layoutParams = match(dp(44)).apply { topMargin = dp(6) }
+            setOnClickListener { onClick() }
+        }.also { pill(it, false, TEAL) }
+
+        glassesStatusView = TextView(this).apply {
+            text = getString(R.string.glasses_idle)
+            textSize = 11f
+            setTextColor(SUB)
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(4), dp(6), 0, 0)
+        }
+        statusView = TextView(this).apply {
+            text = getString(R.string.vision_idle)
+            textSize = 11f
+            setTextColor(SUB)
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(4), dp(6), 0, 0)
+        }
+        devSection.addView(devButton(getString(R.string.btn_glasses_setup)) { setupGlasses() })
+        devSection.addView(devButton(getString(R.string.btn_start_vision)) { connectCameraAndStart() })
+        devSection.addView(devButton(getString(R.string.btn_stop_vision)) {
+            AppGraph.visionPipeline.stop()
+        })
+        devSection.addView(devButton(getString(R.string.btn_mock_on)) {
             AppGraph.mockSceneProducer.setEnabled(true)
         })
-        root.addView(button(getString(R.string.btn_mock_off)) {
+        devSection.addView(devButton(getString(R.string.btn_mock_off)) {
             AppGraph.mockSceneProducer.setEnabled(false)
         })
-        root.addView(button(getString(R.string.btn_ask)) {
+        devSection.addView(devButton("My People: forget everyone") {
+            AppGraph.myPeople.clear()
+            toast("Enrolled faces deleted.")
+        })
+        devSection.addView(devButton(getString(R.string.btn_ask)) {
             // Uses the on-device Qwen LLM when ready (falls back to rule-based);
             // generation runs off-thread, so toast the answer when it returns.
             toast(if (AppGraph.llmEngine.isReady) "Asking Qwen…" else "Answering…")
@@ -215,16 +421,33 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread { toast(answer) }
             }
         })
-
+        devSection.addView(glassesStatusView)
+        devSection.addView(statusView)
         sceneView = TextView(this).apply {
             text = getString(R.string.scene_waiting)
-            textSize = 13f
-            setPadding(0, pad, 0, 0)
-            gravity = Gravity.START
+            textSize = 10f
+            setTextColor(SUB)
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(4), dp(8), 0, 0)
         }
-        root.addView(sceneView)
+        devSection.addView(sceneView)
+        root.addView(devSection)
 
-        return ScrollView(this).apply { addView(root) }
+        return ScrollView(this).apply {
+            setBackgroundColor(BG)
+            isVerticalScrollBarEnabled = false
+            addView(root)
+        }
+    }
+
+    // ---------------------------------------------------------- actions ----
+
+    private fun setGlassesRunning(running: Boolean) {
+        glassesRunning = running
+        startButton.text = if (running) "■  Stop Glasses Vision" else "▶  Start Glasses Vision"
+        pill(startButton, true, if (running) Color.parseColor("#FF8A5C") else TEAL)
+        liveChip.text = if (running) "● LIVE — RAY-BAN POV" else "● OFFLINE"
+        liveChip.setTextColor(if (running) Color.parseColor("#34D399") else SUB)
     }
 
     private fun connectCameraAndStart() {
@@ -251,8 +474,10 @@ class MainActivity : AppCompatActivity() {
     /** Step 2: glasses camera permission (via Meta AI) -> stream into the pipeline. */
     private fun connectGlassesAndStart() {
         if (!AppGraph.glassesSource.isRegistered) {
-            toast("Run Glasses Setup first (and approve in the Meta AI app).")
-            return
+            // First run: do the SDK registration inline so the primary button is
+            // the only thing a demo operator ever needs to touch.
+            setupGlasses()
+            if (!AppGraph.glassesSource.isRegistered) return
         }
         lifecycleScope.launch {
             val status = Wearables.checkPermissionStatus(Permission.CAMERA).getOrNull()
@@ -267,9 +492,10 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { glassesPreview.setImageBitmap(bmp) }
         }
         AppGraph.glassesSource.start(AppGraph.scope)
+        setGlassesRunning(true)
     }
 
-    /** Press-and-hold voice question: record -> Whisper -> Qwen-VL -> spoken answer. */
+    /** Press-and-hold voice question: record -> Qwen ASR -> Qwen-VL -> spoken answer. */
     @SuppressLint("ClickableViewAccessibility")
     private fun wireHoldToAsk() {
         askButton.setOnTouchListener { _, event ->
@@ -281,11 +507,13 @@ class MainActivity : AppCompatActivity() {
                         requestMic.launch(Manifest.permission.RECORD_AUDIO)
                     } else if (recorder.start()) {
                         askButton.text = getString(R.string.btn_ask_recording)
+                        pill(askButton, true, Color.parseColor("#FF4D5E"))
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     askButton.text = getString(R.string.btn_ask_hold)
+                    pill(askButton, true, PURPLE)
                     val wav = recorder.stop()
                     if (wav != null) submitVoiceQuestion(wav)
                     true
@@ -295,31 +523,89 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @SuppressLint("SetTextI18n")
     private fun submitVoiceQuestion(wav: ByteArray) {
-        toast("Thinking…")
-        AppGraph.cloudAsk.ask(
-            wav = wav,
-            frame = AppGraph.glassesSource.lastFrame,
-            onTranscript = { q ->
-                runOnUiThread { toast("You asked: $q") }
-                socket?.updateVoice(q, "cloud", "…")
-            },
-            onAnswer = { answer ->
-                Log.i(TAG, "Surroundings answer: $answer")
-                runOnUiThread {
-                    tts?.speak(answer, TextToSpeech.QUEUE_FLUSH, null, "sonarsight-answer")
-                }
-                socket?.updateVoice("", "cloud", answer)
-            },
-            onError = { msg ->
-                runOnUiThread {
-                    toast(msg)
-                    tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, "sonarsight-error")
-                }
-            },
-        )
+        voiceQuestion.text = "Transcribing…"
+        voiceAnswer.text = ""
+        AppGraph.cloudAsk.transcribeAsync(wav, onError = ::speakError) { q ->
+            runOnUiThread { voiceQuestion.text = "You said: \"$q\"" }
+            socket?.updateVoice(q, "cloud", "…")
+            // qwen-plus decides: device command (typed tool call) or scene question.
+            AppGraph.voiceRouter.route(q) { action -> runOnUiThread { execute(q, action) } }
+        }
     }
 
+    /** Execute a routed voice action; every path ends in a spoken confirmation. */
+    @SuppressLint("SetTextI18n")
+    private fun execute(q: String, action: VoiceCommandRouter.Action) {
+        val frame = AppGraph.glassesSource.lastFrame
+        when (action) {
+            is VoiceCommandRouter.Action.SetPingSensitivity -> {
+                AppGraph.collisionAudio.setSensitivity(action.level)
+                speak("Ping sensitivity set to ${action.level}.")
+            }
+            is VoiceCommandRouter.Action.SetCollisionAudio -> {
+                AppGraph.collisionAudio.setEnabled(action.enabled)
+                audioButton.text = if (action.enabled) "🔊 3D Audio: ON" else "🔊 3D Audio: OFF"
+                pill(audioButton, action.enabled, GREEN)
+                speak(if (action.enabled) "Collision audio on." else "Collision audio off.")
+            }
+            is VoiceCommandRouter.Action.SetCloudVision -> {
+                if (AppGraph.cloudVision.configured) {
+                    AppGraph.cloudVision.enabled = action.enabled
+                    cloudButton.text = if (action.enabled) "☁ Qwen Cloud: ON" else "☁ Qwen Cloud: OFF"
+                    pill(cloudButton, action.enabled, TEAL)
+                    speak(if (action.enabled) "Qwen cloud vision on." else "Cloud vision off — local models.")
+                } else speak("No Qwen API key configured.")
+            }
+            is VoiceCommandRouter.Action.AddHazardWatch -> {
+                AppGraph.cloudVision.addWatch(action.labels)
+                speak("Now watching for ${action.labels.joinToString(" and ")}.")
+            }
+            is VoiceCommandRouter.Action.ReadText -> {
+                speak("Reading.")
+                AppGraph.cloudAsk.readText(frame, onAnswer = ::speakAnswer, onError = ::speakError)
+            }
+            is VoiceCommandRouter.Action.EnrollFace -> {
+                if (AppGraph.myPeople.enroll(frame, action.name)) {
+                    speak("Remembered ${action.name}. I'll announce them when I see them. " +
+                        "Make sure they're okay with that.")
+                } else speak("I need them in view first — face them and try again.")
+            }
+            is VoiceCommandRouter.Action.FindObject -> {
+                speak(AppGraph.sceneJournal.answerFor(action.name))
+            }
+            is VoiceCommandRouter.Action.AskScene -> {
+                AppGraph.cloudAsk.answerScene(q, frame, onAnswer = { a ->
+                    socket?.updateVoice("", "cloud", a)
+                    speakAnswer(a)
+                }, onError = ::speakError)
+            }
+        }
+    }
+
+    private fun speak(msg: String) {
+        runOnUiThread {
+            voiceAnswer.text = msg
+            tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, "sonarsight-answer")
+        }
+    }
+
+    private fun speakAnswer(answer: String) {
+        Log.i(TAG, "Answer: $answer")
+        speak(answer)
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun speakError(msg: String) {
+        runOnUiThread {
+            voiceQuestion.text = "Couldn't answer"
+            voiceAnswer.text = msg
+            tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, "sonarsight-error")
+        }
+    }
+
+    @SuppressLint("SetTextI18n")
     private fun toggleCloudVision() {
         if (!AppGraph.cloudVision.configured) {
             toast("No Qwen API key configured (qwen_api_key in local.properties).")
@@ -327,21 +613,24 @@ class MainActivity : AppCompatActivity() {
         }
         val enable = !AppGraph.cloudVision.enabled
         AppGraph.cloudVision.enabled = enable
-        cloudButton.text =
-            getString(if (enable) R.string.btn_cloud_on else R.string.btn_cloud_off)
+        cloudButton.text = if (enable) "☁ Qwen Cloud: ON" else "☁ Qwen Cloud: OFF"
+        pill(cloudButton, enable, TEAL)
         toast(
             if (enable) "Cloud vision on — qwen-vl-max grounding on Qwen Cloud."
             else "Cloud vision off — local model."
         )
     }
 
+    @SuppressLint("SetTextI18n")
     private fun toggleCollisionAudio() {
         val enable = !AppGraph.collisionAudio.isEnabled()
         AppGraph.collisionAudio.setEnabled(enable)
-        audioButton.text =
-            getString(if (enable) R.string.btn_audio_on else R.string.btn_audio_off)
+        audioButton.text = if (enable) "🔊 3D Audio: ON" else "🔊 3D Audio: OFF"
+        pill(audioButton, enable, GREEN)
         if (enable) toast("3D collision audio on — pings pan toward the obstacle.")
     }
+
+    // -------------------------------------------------------- observers ----
 
     private fun observeGlassesStatus() {
         lifecycleScope.launch {
@@ -354,14 +643,49 @@ class MainActivity : AppCompatActivity() {
             AppGraph.sceneBus.state.collectLatest { scene ->
                 sceneView.text = render(scene)
                 overlay.setDetections(scene.objects)
+                zoneBars.setZones(scene.depth)
+                renderBanner(scene)
             }
         }
     }
 
     private fun observeVisionStatus() {
         lifecycleScope.launch {
-            AppGraph.visionPipeline.status.collectLatest { s -> statusView.text = renderStatus(s) }
+            AppGraph.visionPipeline.status.collectLatest { s ->
+                statusView.text = renderStatus(s)
+                renderChips(s)
+            }
         }
+    }
+
+    // -------------------------------------------------------- rendering ----
+
+    @SuppressLint("SetTextI18n")
+    private fun renderChips(s: VisionStatus) {
+        srcChip.text = if (s.cloudActive) "☁ QWEN VL-MAX" else "⚡ EDGE ${s.backend}"
+        srcChip.setTextColor(if (s.cloudActive) TEAL else TEXT)
+        fpsChip.text = "%.1f fps".format(s.fps)
+        latChip.text = if (s.cloudActive) "rtt %.0fms".format(s.yoloMs) else "yolo %.0fms".format(s.yoloMs)
+        detChip.text = "${s.detections} obj"
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun renderBanner(s: SceneState) {
+        if (s.ts == 0L) return  // no scene yet — keep the STANDBY banner
+        val d = s.depth
+        val near = 0.55f
+        val (text, color) = when {
+            d.center >= 0.75f -> "⛔ OBSTACLE AHEAD — STOP" to RED
+            d.center >= near -> "⚠ OBSTACLE AHEAD — STEER" to AMBER
+            d.left >= near && d.right >= near -> "⚠ TIGHT — BOTH SIDES" to AMBER
+            d.left >= near -> "⚠ OBSTACLE LEFT — KEEP RIGHT" to AMBER
+            d.right >= near -> "⚠ OBSTACLE RIGHT — KEEP LEFT" to AMBER
+            s.pathClear -> "✓ PATH CLEAR" to GREEN
+            else -> "PROCEED CAREFULLY" to AMBER
+        }
+        pathBanner.text = text
+        pathBanner.setTextColor(Color.BLACK)
+        pathBanner.background = rounded(color, 12)
     }
 
     private fun renderStatus(s: VisionStatus): String = buildString {
@@ -403,5 +727,16 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "SixthSenseScene"
+
+        private val BG = Color.parseColor("#0B0F14")
+        private val CARD = Color.parseColor("#151C24")
+        private val CARD_STROKE = Color.parseColor("#26313D")
+        private val TEXT = Color.parseColor("#E6EDF3")
+        private val SUB = Color.parseColor("#8B98A5")
+        private val TEAL = Color.parseColor("#2DD4BF")
+        private val PURPLE = Color.parseColor("#A78BFA")
+        private val GREEN = Color.parseColor("#34D399")
+        private val AMBER = Color.parseColor("#FFC400")
+        private val RED = Color.parseColor("#FF4D5E")
     }
 }

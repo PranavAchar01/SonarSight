@@ -501,8 +501,8 @@ class VisionPipeline(
         private const val DEPTH_MIN_INTERVAL_MS = 900L
         private const val YOLO_SIZE = 640
         private const val LIVE_CONF = 0.85f
-        private const val FRAME_WIDTH = 480
-        private const val FRAME_QUALITY = 50
+        private const val FRAME_WIDTH = 640
+        private const val FRAME_QUALITY = 60
         private const val FRAME_MIN_INTERVAL_MS = 125L   // ~8 fps to the dashboard
         private const val CLOUD_FRESH_MIN_MS = 900L      // cloud validity floor (fast RTT)
         private const val CLOUD_FRESH_MAX_MS = 8000L     // cap so stale boxes can't linger

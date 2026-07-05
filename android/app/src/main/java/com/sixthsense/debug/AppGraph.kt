@@ -4,8 +4,11 @@ import android.content.Context
 import com.sixthsense.audio.CollisionAudioController
 import com.sixthsense.cloud.CloudAskClient
 import com.sixthsense.cloud.CloudVisionClient
+import com.sixthsense.cloud.MyPeopleClient
+import com.sixthsense.cloud.VoiceCommandRouter
 import com.sixthsense.core.MockSceneProducer
 import com.sixthsense.core.SceneBus
+import com.sixthsense.core.SceneJournal
 import com.sixthsense.glasses.GlassesFrameSource
 import com.sixthsense.vision.VisionPipeline
 import com.sixthsense.voice.LlmEngine
@@ -41,6 +44,12 @@ object AppGraph {
         private set
     lateinit var cloudAsk: CloudAskClient
         private set
+    lateinit var voiceRouter: VoiceCommandRouter
+        private set
+    lateinit var myPeople: MyPeopleClient
+        private set
+    lateinit var sceneJournal: SceneJournal
+        private set
 
     /** Background scope for producers/streams; survives Activity recreation. */
     val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -61,6 +70,11 @@ object AppGraph {
         collisionAudio = CollisionAudioController(sceneBus, scope)
         cloudVision = CloudVisionClient(visionPipeline)
         cloudAsk = CloudAskClient()
+        voiceRouter = VoiceCommandRouter()
+        myPeople = MyPeopleClient(app)
+        sceneJournal = SceneJournal(sceneBus, scope)
+        // Cloud grounding saw a person -> try to match against the enrolled circle.
+        cloudVision.onPersonSeen = { myPeople.maybeIdentify(glassesSource.lastFrame) }
         initialized = true
         // Load the on-device Qwen LLM off the main thread (fast no-op if qwen.pte
         // isn't bundled; the voice agent uses rule-based answers until it's ready).

@@ -26,6 +26,11 @@ class CollisionAudioController(
     @Volatile
     private var enabled = false
 
+    // Voice-adjustable ("make the pings more sensitive"): the nearness at which
+    // something becomes a threat. Lower = earlier warnings.
+    @Volatile
+    private var threshold = BeltMapper.OBJECT_NEAR_THRESHOLD
+
     @Volatile
     private var scene: SceneState? = null
 
@@ -41,8 +46,7 @@ class CollisionAudioController(
                     continue
                 }
                 val urgency =
-                    ((threat.nearness - BeltMapper.OBJECT_NEAR_THRESHOLD) /
-                        (1f - BeltMapper.OBJECT_NEAR_THRESHOLD)).coerceIn(0f, 1f)
+                    ((threat.nearness - threshold) / (1f - threshold)).coerceIn(0f, 1f)
                 pinger.ping(azimuthOf(threat), urgency)
                 delay((MAX_INTERVAL_MS - (MAX_INTERVAL_MS - MIN_INTERVAL_MS) * urgency).toLong())
             }
@@ -55,6 +59,15 @@ class CollisionAudioController(
 
     fun isEnabled(): Boolean = enabled
 
+    /** "low" = fewer/later pings, "high" = earlier/more pings. */
+    fun setSensitivity(level: String) {
+        threshold = when (level) {
+            "low" -> 0.60f
+            "high" -> 0.30f
+            else -> BeltMapper.OBJECT_NEAR_THRESHOLD
+        }
+    }
+
     /**
      * The most-threatening thing in the scene: a detected object OR a near depth
      * zone. The zone path is what makes featureless obstacles ping — a blank
@@ -63,14 +76,14 @@ class CollisionAudioController(
      */
     private fun pickThreat(s: SceneState): DetectedObj? {
         val objThreat = s.objects
-            .filter { it.nearness >= BeltMapper.OBJECT_NEAR_THRESHOLD && it.conf >= MIN_CONF }
+            .filter { it.nearness >= threshold && it.conf >= MIN_CONF }
             .maxByOrNull { it.nearness }
         val zoneThreat = listOf(
             "left" to s.depth.left,
             "center" to s.depth.center,
             "right" to s.depth.right,
         )
-            .filter { it.second >= BeltMapper.OBJECT_NEAR_THRESHOLD }
+            .filter { it.second >= threshold }
             .maxByOrNull { it.second }
             ?.let { (zone, nearness) ->
                 DetectedObj(label = "obstacle", zone = zone, nearness = nearness, conf = 1f)

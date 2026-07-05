@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SixthSense — Live Vision Dashboard</title>
-  <meta name="description" content="Deployable live-vision dashboard for the SixthSense on-device navigation copilot: the Galaxy S25 Ultra camera feed plus the on-device perception technologies, streamed live from the phone." />
+  <title>SonarSight — Live Vision Dashboard</title>
+  <meta name="description" content="Live judge dashboard for SonarSight: the Ray-Ban Meta glasses POV, edge perception (int8 YOLO + metric depth) and Qwen Cloud reasoning, mirrored live from the phone." />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -14,8 +14,8 @@
     <div class="brand">
       <span class="brand__mark" aria-hidden="true"></span>
       <span class="brand__text">
-        <span class="brand__name">Sixth<b>Sense</b> · Live Vision</span>
-        <span class="brand__tag">On-device navigation copilot — the S25 Ultra camera &amp; the tech running on it</span>
+        <span class="brand__name">Sonar<b>Sight</b> · Live Vision</span>
+        <span class="brand__tag">See with sound — Ray-Ban Meta glasses POV &amp; the edge + Qwen Cloud stack running live</span>
       </span>
     </div>
     <div class="statuses">
@@ -49,7 +49,7 @@
 
       <!-- ============================ CAMERA HERO ========================= -->
       <div class="card col-8" data-card>
-        <button class="card__head" aria-expanded="true"><span class="chevron" aria-hidden="true">▾</span><span class="card__title">Camera — Galaxy S25 Ultra</span><span class="card__badge card__badge--blue">Live from device</span></button>
+        <button class="card__head" aria-expanded="true"><span class="chevron" aria-hidden="true">▾</span><span class="card__title">Ray-Ban Meta Glasses — Live POV</span><span class="card__badge card__badge--blue">Live from device</span></button>
         <div class="card__body">
           <div class="canvas-wrap"><canvas id="cv-camera" role="img" aria-label="Live camera with perception overlays" width="1280" height="720"></canvas></div>
           <div class="layerbar" id="layerbar" role="group" aria-label="Overlay layers">
@@ -60,7 +60,7 @@
             <button class="layer-toggle" data-layer="hud"       aria-pressed="true"><span class="sw"></span>HUD</button>
           </div>
           <div class="cam-caption">
-            <span>Galaxy S25 Ultra</span><span class="sep">|</span>
+            <span>Ray-Ban Meta → Galaxy A23</span><span class="sep">|</span>
             <span><b data-bind="camRes">—</b></span><span class="sep">|</span>
             <span><b data-bind="fps">0.0</b> fps</span><span class="sep">|</span>
             <span><b data-bind="ms">0</b> ms/frame</span><span class="sep">|</span>
@@ -74,7 +74,7 @@
         <button class="card__head" aria-expanded="true"><span class="chevron" aria-hidden="true">▾</span><span class="card__title">On-device technology</span><span class="card__badge card__badge--green">ExecuTorch</span></button>
         <div class="card__body">
           <div id="tech-list"></div>
-          <p class="card__note">Lit = active right now, driven by the live <code>SceneState</code>. Everything runs locally on the Snapdragon&nbsp;8&nbsp;Elite (SM8750, Hexagon&nbsp;v79) via ExecuTorch with the Qualcomm&nbsp;QNN backend (XNNPACK CPU fallback) — no cloud, airplane mode.</p>
+          <p class="card__note">Lit = active right now, driven by the live <code>SceneState</code>. Reflexes run on the phone (ExecuTorch XNNPACK: int8 YOLO11n + metric Depth-Anything-V2); deep understanding runs on Qwen Cloud (qwen-vl-max grounding + scene Q&amp;A, qwen3-asr-flash speech).</p>
         </div>
       </div>
 
@@ -148,7 +148,7 @@
       <!-- ========================== DATA FLOW ============================ -->
       <div class="card col-6" data-card>
         <button class="card__head" aria-expanded="true"><span class="chevron" aria-hidden="true">▾</span><span class="card__title">Pipeline — camera to outputs</span><span class="card__badge card__badge--green">On-device</span></button>
-        <div class="card__body"><div class="canvas-wrap" style="background:#fff"><canvas id="cv-flow" role="img" aria-label="Data flow: S25 camera to vision models to SceneState to belt, voice and dashboard" width="640" height="300"></canvas></div></div>
+        <div class="card__body"><div class="canvas-wrap" style="background:#fff"><canvas id="cv-flow" role="img" aria-label="Data flow: glasses POV to vision models to SceneState to audio pings, voice and dashboard" width="640" height="300"></canvas></div></div>
       </div>
 
       <!-- ============================== RAW ============================== -->
@@ -164,7 +164,7 @@
   </main>
 
   <p class="footer">
-    SixthSense live vision dashboard — visualization only, no AI runs here. Connects to the phone at the address above and renders the device's live <code>SceneState</code> (camera frame, depth, objects, OCR, path, belt, voice). Auto-reconnects if the link drops.
+    SonarSight live vision dashboard — visualization only, no AI runs here. Connects to the phone at the address above and renders the device's live <code>SceneState</code> (camera frame, depth, objects, OCR, path, belt, voice). Auto-reconnects if the link drops.
   </p>
 
   <script src="app.js"></script>
