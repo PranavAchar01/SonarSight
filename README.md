@@ -1,7 +1,6 @@
 # SonarSight
 
 **A navigation copilot for blind and low-vision users — see with your ears.**
-*(formerly SixthSense; internal Android package remains `com.sixthsense`)*
 
 Ray-Ban Meta glasses stream the wearer's point of view to an Android phone via
 the **Meta Wearables Device Access Toolkit**. The phone runs YOLO11n on-device
