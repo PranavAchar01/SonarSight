@@ -42,6 +42,14 @@ class GlassesFrameSource(private val pipeline: VisionPipeline) {
     var onFrame: ((android.graphics.Bitmap) -> Unit)? = null
     private var lastPreviewMs = 0L
 
+    /**
+     * Wearer pressed the glasses' capture button (the SDK reports it as a
+     * session PAUSE). Wired to the hands-free "talk to Qwen" flow; the stream
+     * itself resumes on the wearer's next tap, and [lastFrame] stays cached so
+     * the VLM still has a view to answer about.
+     */
+    var onWearerTap: (() -> Unit)? = null
+
     /** Most recent decoded POV frame — what the voice agent's VLM looks at. */
     @Volatile
     var lastFrame: android.graphics.Bitmap? = null
@@ -115,6 +123,7 @@ class GlassesFrameSource(private val pipeline: VisionPipeline) {
             DeviceSessionState.PAUSED -> {
                 // Wearer tap pause: keep the stream for the SDK to resume.
                 _status.value = "glasses: paused (tap glasses to resume)"
+                if (prev == DeviceSessionState.STARTED) onWearerTap?.invoke()
             }
             else -> _status.value = "glasses: session $state"
         }

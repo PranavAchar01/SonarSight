@@ -30,6 +30,7 @@ import com.meta.wearable.dat.core.types.PermissionStatus
 import com.sixthsense.cloud.VoiceCommandRouter
 import com.sixthsense.core.SceneState
 import com.sixthsense.debug.AppGraph
+import com.sixthsense.glasses.GlassesTapTrigger
 import com.sixthsense.ui.ZoneBarsView
 import com.sixthsense.vision.DetectionOverlayView
 import com.sixthsense.vision.VisionStatus
@@ -70,6 +71,8 @@ class MainActivity : AppCompatActivity() {
     private var socket: SceneSocket? = null
     private var tts: TextToSpeech? = null
     private var glassesRunning = false
+    private var tapTrigger: GlassesTapTrigger? = null
+    private var handsFreeListening = false
     private val recorder = VoiceRecorder()
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -135,6 +138,50 @@ class MainActivity : AppCompatActivity() {
         AppGraph.myPeople.onAnnounce = { line ->
             runOnUiThread { tts?.speak(line, TextToSpeech.QUEUE_ADD, null, "sonarsight-person") }
         }
+        // Hands-free "talk to Qwen": glasses touchpad tap (Bluetooth media button)
+        // or the capture button (session pause) both open a listening window.
+        tapTrigger = GlassesTapTrigger(this).also {
+            it.onTap = { runOnUiThread { startHandsFreeAsk() } }
+        }
+        AppGraph.glassesSource.onWearerTap = { runOnUiThread { startHandsFreeAsk() } }
+    }
+
+    /**
+     * Tap on the glasses -> earcon -> fixed listening window -> the same
+     * router/Q&A flow as hold-to-ask. A second tap ends the window early.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun startHandsFreeAsk() {
+        if (handsFreeListening) {
+            handsFreeListening = false
+            askButton.text = getString(R.string.btn_ask_hold)
+            pill(askButton, true, PURPLE)
+            recorder.stop()?.let { submitVoiceQuestion(it) }
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestMic.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        val tone = android.media.ToneGenerator(
+            android.media.AudioManager.STREAM_MUSIC, 80)
+        tone.startTone(android.media.ToneGenerator.TONE_PROP_ACK, 150)
+        askButton.postDelayed({
+            tone.release()
+            if (!recorder.start()) return@postDelayed
+            handsFreeListening = true
+            askButton.text = "● Listening (glasses)… tap again to finish"
+            pill(askButton, true, Color.parseColor("#FF4D5E"))
+            askButton.postDelayed({
+                if (!handsFreeListening) return@postDelayed
+                handsFreeListening = false
+                askButton.text = getString(R.string.btn_ask_hold)
+                pill(askButton, true, PURPLE)
+                recorder.stop()?.let { submitVoiceQuestion(it) }
+            }, HANDS_FREE_LISTEN_MS)
+        }, 350)
     }
 
     // ------------------------------------------------------------ UI build --
@@ -717,6 +764,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        tapTrigger?.release()
         tts?.shutdown()
         socket?.shutdown()
         // CameraX unbinds with the lifecycle automatically; fully stop the pipeline
@@ -727,6 +775,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "SixthSenseScene"
+        private const val HANDS_FREE_LISTEN_MS = 6000L
 
         private val BG = Color.parseColor("#0B0F14")
         private val CARD = Color.parseColor("#151C24")
