@@ -74,6 +74,7 @@ class MainActivity : AppCompatActivity() {
     private var tapTrigger: GlassesTapTrigger? = null
     private var handsFreeListening = false
     private var cloudDegraded = false
+    private var cloudEnabledAt = 0L
     private val recorder = VoiceRecorder()
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -601,6 +602,7 @@ class MainActivity : AppCompatActivity() {
             is VoiceCommandRouter.Action.SetCloudVision -> {
                 if (AppGraph.cloudVision.configured) {
                     AppGraph.cloudVision.enabled = action.enabled
+                    if (action.enabled) cloudEnabledAt = System.currentTimeMillis()
                     cloudButton.text = if (action.enabled) "☁ Qwen Cloud: ON" else "☁ Qwen Cloud: OFF"
                     pill(cloudButton, action.enabled, TEAL)
                     speak(if (action.enabled) "Qwen cloud vision on." else "Cloud vision off — local models.")
@@ -661,6 +663,7 @@ class MainActivity : AppCompatActivity() {
         }
         val enable = !AppGraph.cloudVision.enabled
         AppGraph.cloudVision.enabled = enable
+        if (enable) cloudEnabledAt = System.currentTimeMillis()
         cloudButton.text = if (enable) "☁ Qwen Cloud: ON" else "☁ Qwen Cloud: OFF"
         pill(cloudButton, enable, TEAL)
         toast(
@@ -727,6 +730,9 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetTextI18n")
     private fun renderCloudHealth(s: VisionStatus) {
         if (!AppGraph.cloudVision.enabled) { cloudDegraded = false; return }
+        // Grace period after enabling: the first grounding round takes one full
+        // RTT, and "no result yet" is not an outage.
+        if (System.currentTimeMillis() - cloudEnabledAt < CLOUD_ENABLE_GRACE_MS) return
         val degraded = s.running &&
             AppGraph.visionPipeline.cloudResultAgeMs() > CLOUD_DEGRADED_AFTER_MS
         if (degraded == cloudDegraded) return
@@ -803,6 +809,7 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "SixthSenseScene"
         private const val HANDS_FREE_LISTEN_MS = 6000L
         private const val CLOUD_DEGRADED_AFTER_MS = 20_000L
+        private const val CLOUD_ENABLE_GRACE_MS = 35_000L
 
         private val BG = Color.parseColor("#0B0F14")
         private val CARD = Color.parseColor("#151C24")

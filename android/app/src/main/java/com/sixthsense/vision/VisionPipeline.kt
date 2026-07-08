@@ -94,13 +94,18 @@ class VisionPipeline(
         cloudZones = zones
         cloudTs = System.currentTimeMillis()
         cloudRttMs = rttMs
+        cloudFailures = 0
     }
+
+    @Volatile private var cloudFailures = 0
 
     fun noteCloudFailure() {
-        cloudTs = 0L  // immediately stale -> local model takes over
+        // One transient failure shouldn't declare an outage; two in a row
+        // (~10s with the 5s connect timeout) flips the pipeline to edge.
+        if (++cloudFailures >= 2) cloudTs = 0L
     }
 
-    /** Ms since the last cloud result landed (MAX_VALUE if none/failed). */
+    /** Ms since the last cloud result landed (MAX_VALUE if none/failed-out). */
     fun cloudResultAgeMs(): Long =
         if (cloudTs == 0L) Long.MAX_VALUE else System.currentTimeMillis() - cloudTs
     @Volatile private var loggedYolo = false
