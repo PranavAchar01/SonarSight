@@ -73,6 +73,7 @@ class MainActivity : AppCompatActivity() {
     private var glassesRunning = false
     private var tapTrigger: GlassesTapTrigger? = null
     private var handsFreeListening = false
+    private var cloudDegraded = false
     private val recorder = VoiceRecorder()
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -714,6 +715,31 @@ class MainActivity : AppCompatActivity() {
         fpsChip.text = "%.1f fps".format(s.fps)
         latChip.text = if (s.cloudActive) "rtt %.0fms".format(s.yoloMs) else "yolo %.0fms".format(s.yoloMs)
         detChip.text = "${s.detections} obj"
+        renderCloudHealth(s)
+    }
+
+    /**
+     * Make degradation legible: cloud toggled ON but no result for a while
+     * (network gone, DashScope unreachable) -> the cloud button itself turns
+     * amber EDGE FALLBACK, with a toast on each transition. The threshold is
+     * ~2 cloud round trips so a normal slow response doesn't flap the button.
+     */
+    @SuppressLint("SetTextI18n")
+    private fun renderCloudHealth(s: VisionStatus) {
+        if (!AppGraph.cloudVision.enabled) { cloudDegraded = false; return }
+        val degraded = s.running &&
+            AppGraph.visionPipeline.cloudResultAgeMs() > CLOUD_DEGRADED_AFTER_MS
+        if (degraded == cloudDegraded) return
+        cloudDegraded = degraded
+        if (degraded) {
+            cloudButton.text = "☁ Cloud: EDGE FALLBACK"
+            pill(cloudButton, true, AMBER)
+            toast("Cloud unreachable — edge AI took over")
+        } else {
+            cloudButton.text = "☁ Qwen Cloud: ON"
+            pill(cloudButton, true, TEAL)
+            toast("Qwen Cloud restored")
+        }
     }
 
     @SuppressLint("SetTextI18n")
@@ -776,6 +802,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "SixthSenseScene"
         private const val HANDS_FREE_LISTEN_MS = 6000L
+        private const val CLOUD_DEGRADED_AFTER_MS = 20_000L
 
         private val BG = Color.parseColor("#0B0F14")
         private val CARD = Color.parseColor("#151C24")

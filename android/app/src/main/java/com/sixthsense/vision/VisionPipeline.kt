@@ -99,6 +99,10 @@ class VisionPipeline(
     fun noteCloudFailure() {
         cloudTs = 0L  // immediately stale -> local model takes over
     }
+
+    /** Ms since the last cloud result landed (MAX_VALUE if none/failed). */
+    fun cloudResultAgeMs(): Long =
+        if (cloudTs == 0L) Long.MAX_VALUE else System.currentTimeMillis() - cloudTs
     @Volatile private var loggedYolo = false
 
     private var cameraProvider: ProcessCameraProvider? = null
