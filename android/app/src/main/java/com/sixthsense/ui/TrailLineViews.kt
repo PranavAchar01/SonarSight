@@ -257,7 +257,14 @@ class DirectionRailView @JvmOverloads constructor(
 
     private fun updateAccessibilitySummary() {
         contentDescription = "Direction summary. " + checkpoints.joinToString(". ") {
-            val distance = if (it.distance == "OPEN" || it.distance == "—") "" else ", ${it.distance.lowercase()}"
+            val spokenDistance = when (it.distance) {
+                "< 1 M" -> "less than 1 meter"
+                "~ 1 M" -> "approximately 1 meter"
+                "~ 2 M" -> "approximately 2 meters"
+                "2 M+" -> "more than 2 meters"
+                else -> it.distance.lowercase()
+            }
+            val distance = if (it.distance == "OPEN" || it.distance == "—") "" else ", $spokenDistance"
             "${it.heading.lowercase().replaceFirstChar(Char::uppercase)}: ${it.objectLabel.lowercase()}$distance, ${stateLabel(it.condition).lowercase()}"
         } + "."
     }

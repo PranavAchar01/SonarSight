@@ -243,7 +243,7 @@ class MainActivity : AppCompatActivity() {
         minHeight = dp(height)
         gravity = Gravity.CENTER
         includeFontPadding = false
-        setPadding(dp(16), 0, dp(16), 0)
+        setPadding(dp(16), dp(12), dp(16), dp(12))
         setButtonIcon(this, iconRes, BG)
     }
 
@@ -255,7 +255,7 @@ class MainActivity : AppCompatActivity() {
         stateListAnimator = null
         minHeight = dp(height.coerceAtLeast(48))
         gravity = Gravity.CENTER
-        setPadding(dp(12), 0, dp(12), 0)
+        setPadding(dp(12), dp(10), dp(12), dp(10))
         background = buttonSelector(RAISED, DIVIDER, SURFACE, DIVIDER)
         setTextColor(PRIMARY)
     }
@@ -443,7 +443,7 @@ class MainActivity : AppCompatActivity() {
 
         root.addView(sectionLabel("PRIMARY ACTIONS"))
         askButton = actionButton("HOLD TO ASK", 72, R.drawable.ic_trail_mic).apply {
-            layoutParams = match(dp(72))
+            layoutParams = match()
             contentDescription = "Hold to ask about your surroundings. With TalkBack, double tap to start a timed listening window."
             setOnClickListener { startHandsFreeAsk() }
         }
@@ -455,7 +455,7 @@ class MainActivity : AppCompatActivity() {
             layoutParams = match().apply { topMargin = dp(8) }
         }
         readButton = actionButton("READ TEXT", 56, R.drawable.ic_trail_read).apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginEnd = dp(4) }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) }
             contentDescription = "Read visible text aloud"
             setOnClickListener {
                 showVoicePanel()
@@ -471,7 +471,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         findButton = actionButton("FIND", 56, R.drawable.ic_trail_find).apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginStart = dp(4) }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(4) }
             contentDescription = "Find an object from recent scene memory. Double tap, then say what to find."
             setOnClickListener {
                 showVoicePanel()
@@ -588,7 +588,7 @@ class MainActivity : AppCompatActivity() {
 
         details.addView(sectionLabel("SYSTEM CONTROLS"))
         startButton = detailButton("START GLASSES VISION", 56).apply {
-            layoutParams = match(dp(56))
+            layoutParams = match()
             typeface = Typeface.create(bodyTypeface, Typeface.BOLD)
             setButtonIcon(this, R.drawable.ic_trail_glasses, BG)
             setOnClickListener {
@@ -608,11 +608,11 @@ class MainActivity : AppCompatActivity() {
             layoutParams = match().apply { topMargin = dp(8) }
         }
         audioButton = detailButton("3D AUDIO — DISABLED").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(4) }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) }
             setOnClickListener { toggleCollisionAudio() }
         }
         cloudButton = detailButton("CLOUD VISION — DISABLED").apply {
-            layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(4) }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(4) }
             setOnClickListener { toggleCloudVision() }
         }
         toggles.addView(audioButton)
@@ -656,7 +656,7 @@ class MainActivity : AppCompatActivity() {
         details.addView(diagnosticsToggle)
 
         fun diagnosticButton(label: String, onClick: () -> Unit) = detailButton(label).apply {
-            layoutParams = match(dp(48)).apply { topMargin = dp(5) }
+            layoutParams = match().apply { topMargin = dp(5) }
             setOnClickListener { onClick() }
         }
         diagnostics.addView(diagnosticButton(getString(R.string.btn_glasses_setup)) { setupGlasses() })
@@ -1260,9 +1260,9 @@ class MainActivity : AppCompatActivity() {
         maxOf(depth, objectFor(scene, zone)?.nearness ?: 0f)
 
     private fun distanceLabel(nearness: Float): String = when {
-        nearness >= 0.85f -> "UNDER 1 M"
-        nearness >= 0.65f -> "ABOUT 1 M"
-        nearness >= 0.4f -> "ABOUT 2 M"
+        nearness >= 0.85f -> "< 1 M"
+        nearness >= 0.65f -> "~ 1 M"
+        nearness >= 0.4f -> "~ 2 M"
         else -> "2 M+"
     }
 

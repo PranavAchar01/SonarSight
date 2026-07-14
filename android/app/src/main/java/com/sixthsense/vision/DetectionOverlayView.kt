@@ -5,8 +5,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.View
+import androidx.core.content.res.ResourcesCompat
+import com.sixthsense.R
 import com.sixthsense.core.DetectedObj
 
 /**
@@ -33,8 +36,10 @@ class DetectionOverlayView @JvmOverloads constructor(
     }
     private val labelBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val labelText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+        color = Color.parseColor("#F4F1E8")
         textSize = 12f * density
+        typeface = ResourcesCompat.getFont(context, R.font.atkinson_hyperlegible_next)
+            ?: Typeface.DEFAULT
     }
     private val rect = RectF()
 
@@ -78,8 +83,8 @@ class DetectionOverlayView @JvmOverloads constructor(
         /** Object is approaching. */
         const val YELLOW_THRESHOLD = 0.45f
 
-        private val GREEN = Color.parseColor("#22DD22")
-        private val YELLOW = Color.parseColor("#FFC400")
-        private val RED = Color.parseColor("#FF2A2A")
+        private val GREEN = Color.parseColor("#A8C68F")
+        private val YELLOW = Color.parseColor("#F3C45B")
+        private val RED = Color.parseColor("#FF766B")
     }
 }
