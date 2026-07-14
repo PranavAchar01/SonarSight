@@ -2,11 +2,11 @@
 <resources>
     <string name="app_name">SonarSight</string>
     <string name="title">SonarSight</string>
-    <string name="subtitle">Operator / developer console (not the end-user UI)</string>
+    <string name="subtitle">Trail Line navigation</string>
 
     <string name="btn_glasses_setup">Glasses Setup (register with Meta AI)</string>
-    <string name="btn_glasses_start">▶ Start Glasses Vision (Ray-Ban POV)</string>
-    <string name="btn_glasses_stop">■ Stop Glasses Vision</string>
+    <string name="btn_glasses_start">Start Glasses Vision (Ray-Ban POV)</string>
+    <string name="btn_glasses_stop">Stop Glasses Vision</string>
     <string name="glasses_idle">glasses: idle — run Setup, then Start Glasses Vision</string>
 
     <string name="btn_start_vision">Start Live Vision (phone camera)</string>
@@ -18,8 +18,8 @@
     <string name="btn_mock_on">Mock On</string>
     <string name="btn_mock_off">Mock Off</string>
     <string name="btn_ask">Ask What\'s Ahead</string>
-    <string name="btn_ask_hold">🎤 Hold to Ask About Surroundings</string>
-    <string name="btn_ask_recording">● Listening… release when done</string>
+    <string name="btn_ask_hold">Hold to Ask</string>
+    <string name="btn_ask_recording">Listening — release when done</string>
 
     <string name="vision_idle">vision: off — Start Live Vision or use Mock</string>
     <string name="scene_waiting">Waiting for SceneState…</string>
