@@ -20,7 +20,7 @@ Qwen on Alibaba Cloud is the brain; the ESP32 haptic belt is the body.
    fallback + audio earcons through the glasses' open-ear speakers. This is a feature, not a
    compromise: multi-device haptics is a better EdgeAgent story than a buzzing temple tip.
 3. **The old "never cloud" rule is superseded for this hackathon.** The ExecuTorch-event rule
-   in CLAUDE.md inverts here: Qwen Cloud reasoning is *required*. The on-device models don't
+   inverts here: Qwen Cloud reasoning is *required*. The on-device models don't
    die — they become the **graceful-degradation tier**, which is literally a judged criterion
    for EdgeAgent ("graceful degradation in offline/weak-network scenarios").
 

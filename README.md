@@ -15,7 +15,7 @@ That state drives three outputs:
 
 > **Claude / MCP is a development & debugging command center only.** It is used to build,
 > install, inspect logs, drive debug broadcasts, and manage the repo. It is **never** part of
-> the live assistive runtime. See [CLAUDE.md](CLAUDE.md).
+> the live assistive runtime.
 
 ---
 
@@ -24,7 +24,6 @@ That state drives three outputs:
 ```text
 sixthsense/
   README.md              This file
-  CLAUDE.md              Rules for Claude/MCP (dev-only) + architecture + MVP ladder
   .gitignore
 
   docs/                  Project context, setup, demo, risk, model export, MCP checklist
